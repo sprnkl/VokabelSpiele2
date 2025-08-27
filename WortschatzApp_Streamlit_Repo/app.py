@@ -344,7 +344,8 @@ def main() -> None:
 
     # Daten laden
     try:
-        df = load_vocab("data")
+        DATA_DIR = Path(__file__).parent / "data"
+        df = load_vocab(DATA_DIR)
     except Exception as e:
         st.error(f"Fehler beim Laden der Daten: {e}")
         return
