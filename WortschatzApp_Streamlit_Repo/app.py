@@ -51,7 +51,13 @@ def answers_equal(user_answer: str, correct: str) -> bool:
             return True
     return False
 
-def is_simple_word(word: str, *, ignore_articles: bool = True, ignore_abbrev: bool = True, min_length: int = 2) -> bool:
+def is_simple_word(
+    word: str,
+    *,
+    ignore_articles: bool = True,
+    ignore_abbrev: bool = True,
+    min_length: int = 2,
+) -> bool:
     if not isinstance(word, str):
         return False
     w = word.strip()
@@ -67,8 +73,7 @@ def is_simple_word(word: str, *, ignore_articles: bool = True, ignore_abbrev: bo
 
 def _render_word_drag(pairs):
     pairs_json = json.dumps(pairs, ensure_ascii=False)
-    html = f"""
-<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
 :root {{ --primary:#2196F3; --success:#4CAF50; }}
@@ -93,33 +98,32 @@ button {{
 <script>
 const pairs = {pairs_json};
 let time=0, timerId=null, draggedCard=null;
-let words = pairs.map(p => ({{en:p.en, de:p.de}}));
-function shuffle(a){{for(let i=a.length-1;i>0;i--){{const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}}}
-function isPair(a,b){{return words.some(w=>(w.en===a&&w.de===b)||(w.en===b&&w.de===a));}}
-function checkWin(){{if(document.querySelectorAll('.card:not(.correct)').length===0){{clearInterval(timerId);alert(`🏆 Gewonnen! Zeit: ${{time}} Sekunden`);}}}}
-function startGame(){{
+let words = pairs.map(p => ({{{{en:p.en, de:p.de}}}}));
+function shuffle(a){{{{for(let i=a.length-1;i>0;i--){{{{const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}}}}}}}
+function isPair(a,b){{{{return words.some(w => (w.en===a && w.de===b) || (w.en===b && w.de===a));}}}}
+function checkWin(){{{{if(document.querySelectorAll('.card:not(.correct)').length===0){{{{clearInterval(timerId);alert(`🏆 Gewonnen! Zeit: ${{{{time}}}} Sekunden`);}}}}}}}}
+function startGame(){{{{
   const box=document.getElementById('gameContainer'); box.innerHTML='';
   clearInterval(timerId); time=0; document.getElementById('timeValue').textContent=time;
-  timerId=setInterval(()=>{{time++;document.getElementById('timeValue').textContent=time;}},1000);
+  timerId=setInterval(()=>{{{{time++;document.getElementById('timeValue').textContent=time;}}}},1000);
   const all=words.flatMap(w=>[w.en,w.de]); shuffle(all);
-  for(const w of all){{
+  for(const w of all){{{{
     const c=document.createElement('div'); c.className='card'; c.textContent=w; c.draggable=true;
-    c.addEventListener('dragstart',e=>{{draggedCard=e.target; e.target.style.opacity='0.5';}});
+    c.addEventListener('dragstart',e=>{{{{draggedCard=e.target; e.target.style.opacity='0.5';}}}});
     c.addEventListener('dragover',e=>e.preventDefault());
-    c.addEventListener('drop',e=>{{
+    c.addEventListener('drop',e=>{{{{
       e.preventDefault(); if(!draggedCard||draggedCard===e.target) return;
       const a=draggedCard.textContent.trim(), b=e.target.textContent.trim();
-      if(isPair(a,b)){{ draggedCard.classList.add('correct'); e.target.classList.add('correct'); draggedCard.draggable=false; e.target.draggable=false; draggedCard=null; checkWin(); }}
-      else{{ alert('❌ Kein gültiges Paar!'); draggedCard.style.opacity='1'; draggedCard=null; }}
-    }});
+      if(isPair(a,b)){{{{ c.classList.add('correct'); e.target.classList.add('correct'); draggedCard.draggable=false; e.target.draggable=false; draggedCard=null; checkWin(); }}}}
+      else{{{{ alert('❌ Kein gültiges Paar!'); draggedCard.style.opacity='1'; draggedCard=null; }}}}
+    }}}});
     c.addEventListener('dragend',e=>e.target.style.opacity='1');
     box.appendChild(c);
-  }}
+  }}}}
 }}
-function restartGame(){{clearInterval(timerId);startGame();}}
+function restartGame(){{{{clearInterval(timerId);startGame();}}}}
 document.addEventListener('DOMContentLoaded',startGame);
-</script></body></html>
-"""
+</script></body></html>"""
     return html
 
 # ============================ Robuster Loader ============================
@@ -169,12 +173,12 @@ def load_vocab(data_dir: os.PathLike | str) -> pd.DataFrame:
         df["source_path"] = sp
         df["source_is_page"] = ("/data/pages/" in sp.lower()) or ("/pages/" in sp.lower())
 
-        # --- HARTE ROBUSTHEIT: classe/page aus Dateipfad erzwingen (nur pages/) ---
+        # HARTE ROBUSTHEIT: classe/page aus Dateipfad erzwingen (nur pages/)
         m = page_pattern.search(sp.lower())
         if m:
             k, pg = m.group(1), m.group(2)
-            df["classe"] = str(int(k))           # exakt aus Ordnername
-            df["page"]   = int(pg)               # exakt aus Dateiname
+            df["classe"] = str(int(k))
+            df["page"] = int(pg)
 
         # Fehlende Pflichtspalten ergänzen
         if "classe" not in df.columns:
@@ -188,9 +192,9 @@ def load_vocab(data_dir: os.PathLike | str) -> pd.DataFrame:
 
         # Typen & säubern
         df["classe"] = df["classe"].astype(str)
-        df["page"]   = pd.to_numeric(df["page"], errors="coerce").astype("Int64")
-        df["de"]     = df["de"].astype(str)
-        df["en"]     = df["en"].astype(str)
+        df["page"] = pd.to_numeric(df["page"], errors="coerce").astype("Int64")
+        df["de"] = df["de"].astype(str)
+        df["en"] = df["en"].astype(str)
         df = df[(df["de"].str.strip() != "") & (df["en"].str.strip() != "")]
         frames.append(df)
 
@@ -200,7 +204,7 @@ def load_vocab(data_dir: os.PathLike | str) -> pd.DataFrame:
     all_df = pd.concat(frames, ignore_index=True)
     # Nur Klassen 7–9
     all_df = all_df[all_df["classe"].isin({"7", "8", "9"})]
-    # Dubletten nur auf exakt identische Einträge (Classe, Page, De, En) entfernen
+    # Dubletten nur auf exakt identische Einträge entfernen
     all_df = all_df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
     return all_df
 
@@ -239,7 +243,7 @@ def main() -> None:
 
     # --- Umfang-Filter ---
     if mode == "Nur diese Seite":
-        # Zuerst strikt nur aus pages/ genommen, wenn vorhanden
+        # Bevorzugt nur die Daten aus pages/
         mask_exact = (
             (df["classe"] == classe)
             & (df["page"] == page)
@@ -275,8 +279,9 @@ def main() -> None:
     with col4: min_length = st.number_input("Min. Wortlänge", 1, 10, 2, 1, format="%d")
 
     if filter_simple:
-        mask = df_view["en"].apply(lambda x: is_simple_word(x,
-            ignore_articles=ignore_articles, ignore_abbrev=ignore_abbrev, min_length=min_length))
+        mask = df_view["en"].apply(lambda x: is_simple_word(
+            x, ignore_articles=ignore_articles, ignore_abbrev=ignore_abbrev, min_length=min_length
+        ))
         df_view = df_view[mask].reset_index(drop=True)
         st.write(f"**Vokabeln nach Filter**: {len(df_view)}")
         if df_view.empty:
