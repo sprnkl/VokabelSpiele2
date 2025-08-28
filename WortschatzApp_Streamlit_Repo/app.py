@@ -10,8 +10,8 @@ Vereinfachte, robuste Version:
 - Spiele: Hangman (Galgenmännchen), Wörter ziehen (Drag & Drop), Eingabe (DE→EN).
 - Optionaler Filter: "Nur Einzelwörter".
 
-Neu:
-- Hangman: Sequenzielles „Next word“ (kein Wiederholen bis alle durch), Timer, Congrats+Time, Show solution, Show German hint (optional)
+Features:
+- Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional), Next word (Sequenz ohne Wiederholung bis alle durch)
 - Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN) außerhalb des Canvas
 - Eingabe (DE→EN): Enter zum Prüfen (Form), History-Tabelle live, Show solution (DE — EN)
 """
@@ -77,7 +77,7 @@ def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFra
     try:
         df = df.copy()
         df[c_classe] = pd.to_numeric(df[c_classe], errors="coerce").astype("Int64")
-        df[c_page]   = pd.to_numeric(df[c_page],   errors="coerce").astype("Int64")
+        df[c_page]   = pd.to_numeric(df[c_page], errors="coerce").astype("Int64")
         mask = (df[c_classe] == int(classe)) & (df[c_page] == int(page))
         return df[mask].reset_index(drop=True)
     except Exception:
@@ -86,7 +86,8 @@ def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFra
 
 def fmt_ms(ms: int) -> str:
     """mm:ss.t (Zehntelsekunde)"""
-    if ms < 0: ms = 0
+    if ms < 0:
+        ms = 0
     tenths = (ms % 1000) // 100
     s = (ms // 1000) % 60
     m = (ms // 1000) // 60
@@ -171,15 +172,18 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
 
     df = df[["classe", "page", "de", "en"]].copy()
     df["de"] = df["de"].astype(str).str.strip()
-    df["en"] = df["en"].astype str).str.strip()
+    df["en"] = df["en"].astype(str).str.strip()
     df = df.dropna(how="all", subset=["de", "en"])
     return df
 
 
 # ============================ Spiele-UI ============================
 
-def _timer_block(label_prefix: str, timer: dict, rerun_key: str, extra_reset: callable | None = None):
-    """Timer-UI (Start/Pause/Reset)."""
+def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
+    """
+    Timer-UI (Start/Pause/Reset).
+    timer: dict in st.session_state (mutierbar)
+    """
     now_ms = int(time.time() * 1000)
     current_ms = timer["elapsed_ms"] + (now_ms - timer["started_ms"] if timer["running"] else 0)
 
@@ -369,7 +373,7 @@ def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
     # Optional: Lösung als Tabelle (DE — EN)
     if show_solution_table:
         st.subheader("Solution (DE — EN)")
-        st.dataframe(pd.DataFrame(pairs)[["de", "en"]].rename(columns={"de":"DE", "en":"EN"}), use_container_width=True)
+        st.dataframe(pd.DataFrame(pairs)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}), use_container_width=True)
 
     pairs_json = json.dumps(pairs, ensure_ascii=False)
 
@@ -582,7 +586,7 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
     i = st_state["index"]
     if i >= len(rows):
         t = st_state["timer"]
-        final_ms = t["elapsed_ms"] + (int(time.time()*1000) - t["started_ms"] if t["running"] else 0)
+        final_ms = t["elapsed_ms"] + (int(time.time() * 1000) - t["started_ms"] if t["running"] else 0)
         t["running"] = False
         st.success(f"Congratulations! You finished. Score: {st_state['score']} / {st_state['total']} — Time: {fmt_ms(final_ms)}")
         if st_state["history"]:
