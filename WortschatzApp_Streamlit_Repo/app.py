@@ -22,7 +22,7 @@ import pandas as pd
 import streamlit as st
 from streamlit import components
 
-# ============================ Galgenmännchen ============================
+# ============================ Hangman Pictures ============================
 HANGMAN_PICS = [
     "",
     "\n\n\n\n\n\n----",
@@ -35,7 +35,7 @@ HANGMAN_PICS = [
     "\n  O\n /|\n / \n  |\n / \\\n----",
 ]
 
-# ============================ Hilfsfunktionen ============================
+# ============================ Helper Functions ============================
 def normalize_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
@@ -126,34 +126,18 @@ document.addEventListener('DOMContentLoaded',startGame);
 </script></body></html>"""
     return html
 
-# ============================ Robuster Loader ============================
+# ============================ Robust Vocab Loader ============================
 @st.cache_data(show_spinner=False)
-def get_all_vocab_file_paths(data_dir: os.PathLike | str) -> list[Path]:
-    """
-    Sucht rekursiv nach allen CSV-Dateipfaden in data_dir und gibt sie zurück.
-    Liest noch keine Daten ein.
-    """
-    base = Path(data_dir)
-    paths: list[Path] = []
-    for root, _, files in os.walk(base):
-        for fn in files:
-            if fn.lower().endswith(".csv"):
-                paths.append(Path(root) / fn)
-    if not paths:
-        raise FileNotFoundError(f"Keine CSV-Dateien in {base.resolve()} gefunden.")
-    return paths
-
 def load_and_preprocess_df(path: Path) -> pd.DataFrame:
     """
-    Liest eine einzelne CSV-Datei und normalisiert ihre Spalten.
+    Loads a single CSV file, normalizes its columns, and adds path info.
     """
     try:
         df = pd.read_csv(path, sep=None, engine="python")
     except Exception as e:
-        st.warning(f"CSV-Fehler {path.name}: {e}")
+        st.warning(f"CSV error {path.name}: {e}")
         return pd.DataFrame()
 
-    # Spaltennamen vereinheitlichen
     col_map = {}
     for c in df.columns:
         lc = str(c).strip().lower()
@@ -167,25 +151,21 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
             col_map[c] = "en"
     df = df.rename(columns=col_map)
     
-    # Pfadinformation hinzufügen
     sp = str(path).replace("\\", "/")
     df["source_path"] = sp
     df["source_is_page"] = "/data/pages/" in sp.lower()
 
-    # Fehlende Pflichtspalten ergänzen
     if "classe" not in df.columns: df["classe"] = ""
     if "page" not in df.columns: df["page"] = None
     if "de" not in df.columns: df["de"] = ""
     if "en" not in df.columns: df["en"] = ""
 
-    # Typen & säubern
     df["classe"] = df["classe"].astype(str)
     df["page"] = pd.to_numeric(df["page"], errors="coerce").astype("Int64")
     df["de"] = df["de"].astype(str)
     df["en"] = df["en"].astype(str)
     df = df[(df["de"].str.strip() != "") & (df["en"].str.strip() != "")]
     
-    # Härte Robustheit: Klasse/Seite aus Dateipfad erzwingen (nur pages/)
     page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
     m = page_pattern.search(sp.lower())
     if m:
@@ -195,7 +175,7 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
 
     return df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
 
-# ============================ App ============================
+# ============================ Main Application ============================
 def main() -> None:
     st.set_page_config(page_title="Wortschatz-Spiele (7–9)", page_icon="🎯", layout="centered")
     st.title("🎯 Wortschatz-Spiele (Klassen 7–9)")
@@ -209,42 +189,48 @@ def main() -> None:
         debug_on = st.toggle("Debug an/aus", value=False)
 
     DATA_DIR = Path(__file__).parent / "data"
+    all_files_df = pd.DataFrame()
     try:
-        all_file_paths = get_all_vocab_file_paths(DATA_DIR)
-        
-        # Lade zunächst nur alle Vokabeln, um die Auswahlfelder zu füllen
-        df_all_class_page = pd.concat([load_and_preprocess_df(p) for p in all_file_paths], ignore_index=True)
-        df_all_class_page = df_all_class_page[df_all_class_page["classe"].isin({"7", "8", "9"})]
+        all_file_paths = [p for p in DATA_DIR.glob("**/*.csv")]
+        if not all_file_paths:
+            raise FileNotFoundError(f"No CSV files found in {DATA_DIR.resolve()}.")
+
+        all_files_df = pd.concat([load_and_preprocess_df(p) for p in all_file_paths], ignore_index=True)
+        all_files_df = all_files_df[all_files_df["classe"].isin({"7", "8", "9"})]
     except Exception as e:
-        st.error(f"Fehler beim Laden der Daten: {e}")
+        st.error(f"Error loading data: {e}")
         return
 
-    classes = sorted(df_all_class_page["classe"].unique(), key=lambda x: int(x))
-    if not classes:
-        st.warning("Keine Klassen gefunden."); return
+    if all_files_df.empty:
+        st.warning("No vocabulary found for classes 7-9."); return
 
+    classes = sorted(all_files_df["classe"].unique(), key=lambda x: int(x))
     classe = st.selectbox("Klasse", classes, format_func=lambda x: f"Klasse {x}")
-    df_class = df_all_class_page[df_all_class_page["classe"] == classe]
+    
+    df_class = all_files_df[all_files_df["classe"] == classe]
     pages = sorted(df_class["page"].dropna().unique())
     if not pages:
-        st.warning("Keine Seiten für diese Klasse gefunden."); return
+        st.warning(f"No pages found for class {classe}."); return
 
     page = st.selectbox("Seite", pages, index=0)
     mode = st.radio("Umfang", ["Nur diese Seite", "Bis einschließlich dieser Seite"], horizontal=True)
 
-    # Lade die Vokabeln dynamisch basierend auf der Auswahl
+    # Corrected filtering logic
     if mode == "Nur diese Seite":
-        # Priorität für spezifische pages-Dateien
-        df_view = df_all_class_page[(df_all_class_page["classe"] == classe) & (df_all_class_page["page"] == page) & (df_all_class_page["source_is_page"] == True)]
-        
-        # Wenn keine spezifischen Dateien gefunden, nehme alle für die Seite
-        if df_view.empty:
-            df_view = df_all_class_page[(df_all_class_page["classe"] == classe) & (df_all_class_page["page"] == page)]
-            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
-        else:
+        df_pages_specific = all_files_df[
+            (all_files_df["classe"] == classe) & 
+            (all_files_df["page"] == page) & 
+            (all_files_df["source_is_page"] == True)
+        ]
+
+        if not df_pages_specific.empty:
+            df_view = df_pages_specific
             st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
+        else:
+            df_view = all_files_df[(all_files_df["classe"] == classe) & (all_files_df["page"] == page)]
+            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
     else:
-        df_view = df_all_class_page[(df_all_class_page["classe"] == classe) & (df_all_class_page["page"] <= page)]
+        df_view = all_files_df[(all_files_df["classe"] == classe) & (all_files_df["page"] <= page)]
 
     st.write(f"**Vokabeln verfügbar**: {len(df_view)}")
     if df_view.empty:
@@ -254,11 +240,9 @@ def main() -> None:
         with st.expander("🔍 Debug: Quellenübersicht"):
             st.write(f"Auswahl: Klasse {classe}, Seite {int(page)}, Modus: {mode}")
             if "source_path" in df_view.columns:
-                top = df_view["source_path"].value_counts().head(12)
-                st.table(top)
+                st.table(df_view["source_path"].value_counts().head(12))
             st.dataframe(df_view.head(30))
 
-    # --- Filter: Nur Einzelwörter ---
     st.subheader("Filter: Nur Einzelwörter")
     col1, col2, col3, col4 = st.columns(4)
     with col1: filter_simple = st.checkbox("Nur Einzelwörter aktivieren", value=False)
@@ -280,14 +264,17 @@ def main() -> None:
 
     game = st.selectbox("Wähle ein Spiel", ("Galgenmännchen", "Wörter ziehen", "Eingabe (DE → EN)"))
 
-    # --- Galgenmännchen ---
     if game == "Galgenmännchen":
         key = f"hangman_{classe}_{page}_{mode}_{filter_simple}_{seed_val}"
         state = st.session_state.get(key)
         if state is None:
-            row = rnd.choice(df_view.to_dict("records"))
-            state = {"solution": row["en"], "hint": row["de"], "guessed": set(), "fails": 0}
-            st.session_state[key] = state
+            if not df_view.empty:
+                row = rnd.choice(df_view.to_dict("records"))
+                state = {"solution": row["en"], "hint": row["de"], "guessed": set(), "fails": 0}
+                st.session_state[key] = state
+            else:
+                st.warning("No vocab available for this game.")
+                return
 
         solution, hint = state["solution"], state["hint"]
         guessed, fails = state["guessed"], state["fails"]
@@ -335,14 +322,12 @@ def main() -> None:
         elif fails >= 8:
             st.error(f"🚫 Leider verloren. Das Wort war: {solution}")
 
-    # --- Wörter ziehen ---
     elif game == "Wörter ziehen":
         if df_view.empty: st.info("Nicht genügend Daten."); return
         sample = df_view.sample(n=min(len(df_view), 8), random_state=rnd.randint(0, 10**9))
         pairs = [{"en": row["en"], "de": row["de"]} for _, row in sample.iterrows()]
         components.v1.html(_render_word_drag(pairs), height=620, scrolling=True)
 
-    # --- Eingabe (DE → EN) ---
     else:
         key = f"input_{classe}_{page}_{mode}_{filter_simple}_{seed_val}"
         st_state = st.session_state.get(key)
