@@ -233,7 +233,18 @@ def main() -> None:
     mode = st.radio("Umfang", ["Nur diese Seite", "Bis einschließlich dieser Seite"], horizontal=True)
 
     # Lade die Vokabeln dynamisch basierend auf der Auswahl
-    df_view = get_vocab_for_selection(classe, page, mode, all_file_paths, DATA_DIR)
+    if mode == "Nur diese Seite":
+        # Priorität für spezifische pages-Dateien
+        df_view = df_all_class_page[(df_all_class_page["classe"] == classe) & (df_all_class_page["page"] == page) & (df_all_class_page["source_is_page"] == True)]
+        
+        # Wenn keine spezifischen Dateien gefunden, nehme alle für die Seite
+        if df_view.empty:
+            df_view = df_all_class_page[(df_all_class_page["classe"] == classe) & (df_all_class_page["page"] == page)]
+            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
+        else:
+            st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
+    else:
+        df_view = df_all_class_page[(df_all_class_page["classe"] == classe) & (df_all_class_page["page"] <= page)]
 
     st.write(f"**Vokabeln verfügbar**: {len(df_view)}")
     if df_view.empty:
