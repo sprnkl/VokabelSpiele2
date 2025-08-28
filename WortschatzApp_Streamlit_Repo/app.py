@@ -128,11 +128,11 @@ document.addEventListener('DOMContentLoaded',startGame);
 
 # ============================ Robuster Loader ============================
 @st.cache_data(show_spinner=False)
-def load_vocab(data_dir: os.PathLike | str) -> pd.DataFrame:
+def load_vocab(data_dir: os.PathL ike | str) -> pd.DataFrame:
     """
     Liest alle CSVs aus data_dir.
     - Trennzeichen auto (sep=None, engine="python")
-    - Spalten-Normalisierung
+    - Spalten normalisiert: classe, page, de, en.
     - Für Dateien in data/pages/klasseK/klasseK_pageS.csv:
       classe/page AUS DEM DATEINAMEN erzwingen.
     """
@@ -243,18 +243,19 @@ def main() -> None:
 
     # --- Umfang-Filter ---
     if mode == "Nur diese Seite":
-        # Bevorzugt nur die Daten aus pages/
-        mask_exact = (
-            (df["classe"] == classe)
-            & (df["page"] == page)
-            & (df.get("source_is_page", False) == True)
-        )
-        exact = df[mask_exact]
+        # Korrigierte Logik: Filtert zuerst strikt nach Seite, dann nur die Daten
+        # aus pages/
+        df_view_page = df[(df["classe"] == classe) & (df["page"] == page)]
+        
+        mask_exact = (df_view_page["source_is_page"] == True)
+        exact = df_view_page[mask_exact]
+        
         if len(exact) > 0:
             df_view = exact
             st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
         else:
-            df_view = df[(df["classe"] == classe) & (df["page"] == page)]
+            df_view = df_view_page
+            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
     else:
         df_view = df[(df["classe"] == classe) & (df["page"] <= page)]
 
