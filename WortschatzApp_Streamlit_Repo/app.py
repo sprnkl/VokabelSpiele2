@@ -364,7 +364,7 @@ def main() -> None:
                     ans = st.text_input("Englisches Wort eingeben", key=f"ans_{key}")
                     if st.form_submit_button("Prüfen"):
                         ok = answers_equal(ans, row["en"])
-                        if ok: st.success("✔ Richtig!"); st_state["score"] += 1
+                        if ok: st.success("✔ Korrekt!"); st_state["score"] += 1
                         else: st.error(f"✘ Falsch — Richtig ist: {row['en']}")
                         st_state["results"].append({"de": row["de"], "en": row["en"], "answer": ans, "correct": ok})
                         st_state["total"] += 1; st_state["index"] += 1
