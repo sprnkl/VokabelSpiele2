@@ -10,10 +10,12 @@ Vereinfachte, robuste Version:
 - Spiele: Hangman (Galgenmännchen), Wörter ziehen (Drag & Drop), Eingabe (DE→EN).
 - Optionaler Filter: "Nur Einzelwörter".
 
-Features:
-- Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional), Next word (Sequenz ohne Wiederholung bis alle durch)
-- Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN) außerhalb des Canvas
-- Eingabe (DE→EN): Enter zum Prüfen (Form), History-Tabelle live, Show solution (DE — EN)
+Neu/Fixes:
+- Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
+  Next word (Sequenz), **New word (skip)** jederzeit.
+- Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN) außerhalb des Canvas.
+- Eingabe (DE→EN): Enter zum Prüfen (Form), **stabile Item-Liste** (kein falsches Mapping),
+  History-Tabelle live, Show solution (DE — EN), **Next word (skip)**.
 """
 
 import re
@@ -23,6 +25,7 @@ import unicodedata
 from pathlib import Path
 from datetime import datetime
 import random
+import hashlib
 
 import pandas as pd
 import streamlit as st
@@ -63,10 +66,7 @@ def is_simple_word(
 
 
 def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFrame:
-    """
-    Erzwinge zeilenweises Filtern: nur genau die gewählte Seite und Klasse.
-    (Schützt vor CSVs, die versehentlich mehrere Seiten enthalten.)
-    """
+    """Erzwinge zeilenweises Filtern: nur genau die gewählte Seite und Klasse."""
     if df is None or df.empty:
         return df
     cols = {c.lower(): c for c in df.columns}
@@ -77,7 +77,7 @@ def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFra
     try:
         df = df.copy()
         df[c_classe] = pd.to_numeric(df[c_classe], errors="coerce").astype("Int64")
-        df[c_page]   = pd.to_numeric(df[c_page], errors="coerce").astype("Int64")
+        df[c_page]   = pd.to_numeric(df[c_page],   errors="coerce").astype("Int64")
         mask = (df[c_classe] == int(classe)) & (df[c_page] == int(page))
         return df[mask].reset_index(drop=True)
     except Exception:
@@ -118,7 +118,6 @@ def get_vocab_file_info(data_dir: Path) -> pd.DataFrame:
     """
     file_info = []
     base = Path(data_dir)
-    # exakt: .../data/pages/klasse9/klasse9_page157.csv
     page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
 
     for path in base.glob("**/*.csv"):
@@ -177,7 +176,7 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
     return df
 
 
-# ============================ Spiele-UI ============================
+# ============================ Timer-UI ============================
 
 def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
     """
@@ -213,16 +212,18 @@ def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
             st.rerun()
 
 
+# ============================ Spiele ============================
+
 # ---------- Hangman ----------
 
 def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
     """
-    Hangman mit:
+    Hangman:
     - Timer (Start/Pause/Reset)
-    - optionalem deutschen Hinweis (Show German hint)
+    - Show German hint (optional)
     - Show solution
-    - Congrats + Time
-    - Next word (Sequenz über gemischte Reihenfolge, kein Wiederholen bis alle durch)
+    - Congratulations + Time
+    - Next word (Sequenz), New word (skip) jederzeit
     """
     key = f"hangman_{classe}_{page}"
     state = st.session_state.get(key)
@@ -252,17 +253,14 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
         }
         st.session_state[key] = state
 
-    # Helper zum nächsten Wort
+    # Helper: zum nächsten Wort in Sequenz
     def next_word():
         t = state["timer"]
-        # Timer reset
         t["running"] = False
         t["started_ms"] = 0
         t["elapsed_ms"] = 0
-        # Index erhöhen
         state["idx"] += 1
         if state["idx"] >= len(rows):
-            # alles durch -> neu mischen
             order = list(range(len(rows)))
             rnd = random.Random(seed_val) if seed_val else random.Random()
             rnd.shuffle(order)
@@ -276,22 +274,42 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
         state["solved"] = False
         st.session_state[key] = state
 
+    # Helper: neues (zufälliges) Wort – Skip (kann auch dasselbe sein wie Next)
+    def new_word():
+        t = state["timer"]
+        t["running"] = False
+        t["started_ms"] = 0
+        t["elapsed_ms"] = 0
+        rnd = random.Random(time.time())
+        i = rnd.randrange(len(rows))
+        state["solution"] = rows[i]["en"]
+        state["hint"] = rows[i]["de"]
+        state["guessed"] = set()
+        state["fails"] = 0
+        state["solved"] = False
+        st.session_state[key] = state
+
     solution, hint = state["solution"], state["hint"]
     t = state["timer"]
 
     # Timer-Block
     _timer_block("Hangman", t, rerun_key=f"{key}_timer")
 
-    # Hint/Optionen
-    opt1, opt2 = st.columns(2)
+    # Optionen / Hint / Lösung / New word
+    opt1, opt2, opt3 = st.columns(3)
     with opt1:
         state["show_hint"] = st.checkbox("Show German hint", value=state.get("show_hint", False), key=f"{key}_showhint")
         st.session_state[key] = state
-        if state["show_hint"]:
-            st.write(f"**German (hint):** {hint}")
     with opt2:
         if st.button("Show solution", key=f"{key}_showsol"):
             st.info(f"Solution: {solution}")
+    with opt3:
+        if st.button("New word (skip)", key=f"{key}_newword"):
+            new_word()
+            st.rerun()
+
+    if state["show_hint"]:
+        st.write(f"**German (hint):** {hint}")
 
     # Galgen + Wortanzeige
     cA, cB = st.columns([1, 2])
@@ -307,7 +325,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
             submitted = st.form_submit_button("Check (Enter)")
             if submitted and not state["solved"]:
                 if normalize_text(full_guess) == normalize_text(solution):
-                    # Erfolg
                     if t["running"]:
                         now_ms2 = int(time.time() * 1000)
                         t["elapsed_ms"] = now_ms2 - t["started_ms"]
@@ -343,10 +360,15 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                             st.success(f"Congratulations! You solved it. Time: {fmt_ms(t['elapsed_ms'])}")
                         st.rerun()
     else:
-        # solved -> Next word
-        if st.button("Next word", key=f"{key}_nextword"):
-            next_word()
-            st.rerun()
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Next word", key=f"{key}_nextword"):
+                next_word()
+                st.rerun()
+        with c2:
+            if st.button("New word", key=f"{key}_newword2"):
+                new_word()
+                st.rerun()
 
 
 # ---------- Wörter ziehen (Drag & Drop) ----------
@@ -555,26 +577,47 @@ layoutShuffled();
 
 # ---------- Eingabe (DE → EN) ----------
 
+def _hash_items(items):
+    m = hashlib.sha256()
+    for it in items:
+        m.update((str(it.get("de","")) + "||" + str(it.get("en",""))).encode("utf-8"))
+    return m.hexdigest()
+
 def game_input(df_view: pd.DataFrame, classe: str, page: int):
     """
     Eingabespiel: Deutsch anzeigen, Englisch tippen.
     - Timer (Start/Pause/Reset) – English end message
+    - **Stabile Items** (werden einmal erzeugt und im State gehalten)
     - History table (DE, Your answer, EN (correct), Result) live
     - Show solution shows DE — EN
     - Enter genügt (Form)
+    - Next word (skip) ohne Bewertung
     """
-    rows = df_view.to_dict("records")
-    random.shuffle(rows)
+    items = [
+        {"de": r["de"], "en": r["en"]}
+        for r in df_view.to_dict("records")
+        if isinstance(r["de"], str) and isinstance(r["en"], str)
+    ]
+    if not items:
+        st.info("No vocabulary.")
+        return
 
     state_key = f"input_state_{classe}_{page}"
     st_state = st.session_state.get(state_key)
-    if not st_state:
+
+    # Initialisieren ODER neu initialisieren, wenn Items gewechselt haben
+    items_hash = _hash_items(items)
+    if (st_state is None) or (st_state.get("items_hash") != items_hash):
+        order = list(range(len(items)))
+        random.Random().shuffle(order)
         st_state = {
+            "items_hash": items_hash,
+            "items": items,            # stabil gespeichert
+            "order": order,            # gemischte Reihenfolge der Indizes
             "index": 0,
-            "order": list(range(len(rows))),
             "score": 0,
             "total": 0,
-            "history": [],  # list of dicts: {de, en, user, correct}
+            "history": [],             # list of dicts: {de, en, user, result}
             "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
         }
         st.session_state[state_key] = st_state
@@ -584,62 +627,64 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
 
     # Ende?
     i = st_state["index"]
-    if i >= len(rows):
+    if i >= len(st_state["order"]):
         t = st_state["timer"]
         final_ms = t["elapsed_ms"] + (int(time.time() * 1000) - t["started_ms"] if t["running"] else 0)
         t["running"] = False
         st.success(f"Congratulations! You finished. Score: {st_state['score']} / {st_state['total']} — Time: {fmt_ms(final_ms)}")
         if st_state["history"]:
             df_hist = pd.DataFrame(st_state["history"])
-            df_hist["Result"] = df_hist["correct"].map({True: "Correct", False: "Wrong"})
-            df_hist = df_hist[["de", "user", "en", "Result"]].rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)"})
             st.subheader("History")
-            st.dataframe(df_hist, use_container_width=True)
+            st.dataframe(df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}),
+                         use_container_width=True)
         return
 
-    # Aktueller Eintrag
-    row = rows[st_state["order"][i]]
-    st.write(f"**German (DE):** {row['de']}")
+    # Aktueller Eintrag (stabil!)
+    idx = st_state["order"][i]
+    item = st_state["items"][idx]
 
-    # Form: Enter zum Prüfen
+    st.write(f"**German (DE):** {item['de']}")
+
+    # Bedienleiste: Next word (skip) + Show solution (nur Info)
+    cskip, csol = st.columns(2)
+    with cskip:
+        if st.button("Next word (skip)", key=f"{state_key}_skip_{i}"):
+            st_state["history"].append({"de": item["de"], "user": "", "en": item["en"], "result": "Skipped"})
+            st_state["index"] += 1
+            st.session_state[state_key] = st_state
+            st.rerun()
+    with csol:
+        if st.button("Show solution", key=f"{state_key}_showsol_{i}"):
+            st.info(f"Solution: {item['de']} — {item['en']}")
+
+    # Eingabe-Form: Enter genügt
     with st.form(key=f"input_form_{state_key}_{i}", clear_on_submit=True):
         user = st.text_input("English (EN):", key=f"user_{state_key}_{i}")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            submitted = st.form_submit_button("Check (Enter)")
-        with c2:
-            show_sol_clicked = st.form_submit_button("Show solution")
-        with c3:
-            finish_now = st.form_submit_button("Finish now")
+        submitted = st.form_submit_button("Check (Enter)")
 
     if submitted:
         st_state["total"] += 1
-        ok = normalize_text(user) == normalize_text(row["en"])
+        ok = normalize_text(user) == normalize_text(item["en"])
         if ok:
             st_state["score"] += 1
             st.success("Correct!")
+            res = "Correct"
         else:
             st.warning("Wrong.")
-        st_state["history"].append({"de": row["de"], "user": user, "en": row["en"], "correct": ok})
+            res = "Wrong"
+        st_state["history"].append({"de": item["de"], "user": user, "en": item["en"], "result": res})
         st_state["index"] += 1
         st.session_state[state_key] = st_state
         st.rerun()
 
-    if show_sol_clicked:
-        st.info(f"Solution: {row['de']} — {row['en']}")
-
-    if finish_now:
-        st_state["index"] = len(rows)
-        st.session_state[state_key] = st_state
-        st.rerun()
-
-    # Live-History
+    # Live-History (stabil)
     if st_state["history"]:
         df_hist = pd.DataFrame(st_state["history"])
-        df_hist["Result"] = df_hist["correct"].map({True: "Correct", False: "Wrong"})
-        df_hist = df_hist[["de", "user", "en", "Result"]].rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)"})
         st.subheader("History (so far)")
-        st.dataframe(df_hist.tail(10), use_container_width=True)
+        st.dataframe(
+            df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}).tail(10),
+            use_container_width=True
+        )
 
 
 # ============================ Main ============================
