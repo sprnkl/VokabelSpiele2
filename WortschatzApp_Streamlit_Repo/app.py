@@ -219,8 +219,8 @@ def main() -> None:
     if mode == "Nur diese Seite":
         # First, filter for pages-specific files
         df_pages_specific = all_files_df[
-            (all_files_df["classe"] == classe) & 
-            (all_files_df["page"] == page) & 
+            (all_files_df["classe"] == classe) &
+            (all_files_df["page"] == page) &
             (all_files_df["source_is_page"] == True)
         ]
 
