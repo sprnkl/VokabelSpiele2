@@ -322,7 +322,7 @@ def game_input(df_view: pd.DataFrame):
 
 def main():
     st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
-    st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
+    st.title("Wortschatz-Spiele (Klassen 7–9) – Hauptschule")
 
     # Kopfzeile
     c_left, c_mid, c_debug = st.columns([2, 1, 1])
