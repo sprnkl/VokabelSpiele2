@@ -195,6 +195,51 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
 
     return df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
 
+@st.cache_data(show_spinner=False)
+def get_vocab_for_selection(classe, page, mode, all_file_paths, data_dir) -> pd.DataFrame:
+    """
+    Lädt nur die relevanten Vokabeln basierend auf der Benutzerauswahl.
+    """
+    if mode == "Nur diese Seite":
+        # Versuch, spezifische pages-Datei zu laden
+        pages_path = data_dir / "pages" / f"klasse{classe}" / f"klasse{classe}_page{page}.csv"
+        
+        if pages_path.is_file():
+            df_view = load_and_preprocess_df(pages_path)
+            if not df_view.empty:
+                st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
+                return df_view
+        
+        # Fallback auf alle allgemeinen Dateien, wenn keine spezifische pages-Datei existiert
+        frames = []
+        for p in all_file_paths:
+            if not p.parts[-2] == "pages": # Filtert pages-Dateien aus
+                df = load_and_preprocess_df(p)
+                if not df.empty and str(df["classe"].iloc[0]) == str(classe) and int(df["page"].iloc[0]) == int(page):
+                    frames.append(df)
+        
+        if frames:
+            df_view = pd.concat(frames, ignore_index=True)
+            df_view = df_view[(df_view["classe"] == classe) & (df_view["page"] == page)]
+            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
+            return df_view.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
+        else:
+            return pd.DataFrame()
+    else: # "Bis einschließlich dieser Seite"
+        frames = []
+        for p in all_file_paths:
+            df = load_and_preprocess_df(p)
+            if not df.empty and str(df["classe"].iloc[0]) == str(classe) and int(df["page"].iloc[0]) <= int(page):
+                frames.append(df)
+        
+        if frames:
+            df_view = pd.concat(frames, ignore_index=True)
+            df_view = df_view[(df_view["classe"] == classe) & (df_view["page"] <= page)]
+            return df_view.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
+        else:
+            return pd.DataFrame()
+
+
 # ============================ App ============================
 def main() -> None:
     st.set_page_config(page_title="Wortschatz-Spiele (7–9)", page_icon="🎯", layout="centered")
@@ -211,18 +256,20 @@ def main() -> None:
     DATA_DIR = Path(__file__).parent / "data"
     try:
         all_file_paths = get_all_vocab_file_paths(DATA_DIR)
-        df_full = pd.concat([load_and_preprocess_df(p) for p in all_file_paths], ignore_index=True)
-        df_full = df_full[df_full["classe"].isin({"7", "8", "9"})]
+        
+        # Lade zunächst nur alle Vokabeln, um die Auswahlfelder zu füllen
+        df_all_class_page = pd.concat([load_and_preprocess_df(p) for p in all_file_paths], ignore_index=True)
+        df_all_class_page = df_all_class_page[df_all_class_page["classe"].isin({"7", "8", "9"})]
     except Exception as e:
         st.error(f"Fehler beim Laden der Daten: {e}")
         return
 
-    classes = sorted(df_full["classe"].unique(), key=lambda x: int(x))
+    classes = sorted(df_all_class_page["classe"].unique(), key=lambda x: int(x))
     if not classes:
         st.warning("Keine Klassen gefunden."); return
 
     classe = st.selectbox("Klasse", classes, format_func=lambda x: f"Klasse {x}")
-    df_class = df_full[df_full["classe"] == classe]
+    df_class = df_all_class_page[df_all_class_page["classe"] == classe]
     pages = sorted(df_class["page"].dropna().unique())
     if not pages:
         st.warning("Keine Seiten für diese Klasse gefunden."); return
@@ -230,19 +277,8 @@ def main() -> None:
     page = st.selectbox("Seite", pages, index=0)
     mode = st.radio("Umfang", ["Nur diese Seite", "Bis einschließlich dieser Seite"], horizontal=True)
 
-    # --- Dynamischer Umfang-Filter ---
-    if mode == "Nur diese Seite":
-        # Priorität für spezifische pages-Dateien
-        df_view = df_full[(df_full["classe"] == classe) & (df_full["page"] == page) & (df_full["source_is_page"] == True)]
-
-        # Wenn keine spezifischen Dateien gefunden, nehme alle für die Seite
-        if df_view.empty:
-            df_view = df_full[(df_full["classe"] == classe) & (df_full["page"] == page)]
-            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
-        else:
-            st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
-    else:
-        df_view = df_full[(df_full["classe"] == classe) & (df_full["page"] <= page)]
+    # Lade die Vokabeln dynamisch basierend auf der Auswahl
+    df_view = get_vocab_for_selection(classe, page, mode, all_file_paths, DATA_DIR)
 
     st.write(f"**Vokabeln verfügbar**: {len(df_view)}")
     if df_view.empty:
@@ -389,7 +425,7 @@ def main() -> None:
                         st_state["index"] = len(st_state["order"]); st.session_state[key] = st_state; st.rerun()
                 st.write(f"Frage {st_state['index'] + 1} / {len(st_state['order'])} – Punkte: {st_state['score']} / {st_state['total']}")
 
-    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Insgesamt geladene Vokabeln: {len(df_full)}")
+    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Insgesamt geladene Vokabeln: {len(df_view)}")
 
 if __name__ == "__main__":
     main()
