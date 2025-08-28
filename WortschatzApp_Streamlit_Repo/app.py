@@ -195,51 +195,6 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
 
     return df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
 
-@st.cache_data(show_spinner=False)
-def get_vocab_for_selection(classe, page, mode, all_file_paths, data_dir) -> pd.DataFrame:
-    """
-    Lädt nur die relevanten Vokabeln basierend auf der Benutzerauswahl.
-    """
-    if mode == "Nur diese Seite":
-        # Versuch, spezifische pages-Datei zu laden
-        pages_path = data_dir / "pages" / f"klasse{classe}" / f"klasse{classe}_page{page}.csv"
-        
-        if pages_path.is_file():
-            df_view = load_and_preprocess_df(pages_path)
-            if not df_view.empty:
-                st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
-                return df_view
-        
-        # Fallback auf alle allgemeinen Dateien, wenn keine spezifische pages-Datei existiert
-        frames = []
-        for p in all_file_paths:
-            if not p.parts[-2] == "pages": # Filtert pages-Dateien aus
-                df = load_and_preprocess_df(p)
-                if not df.empty and str(df["classe"].iloc[0]) == str(classe) and int(df["page"].iloc[0]) == int(page):
-                    frames.append(df)
-        
-        if frames:
-            df_view = pd.concat(frames, ignore_index=True)
-            df_view = df_view[(df_view["classe"] == classe) & (df_view["page"] == page)]
-            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
-            return df_view.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
-        else:
-            return pd.DataFrame()
-    else: # "Bis einschließlich dieser Seite"
-        frames = []
-        for p in all_file_paths:
-            df = load_and_preprocess_df(p)
-            if not df.empty and str(df["classe"].iloc[0]) == str(classe) and int(df["page"].iloc[0]) <= int(page):
-                frames.append(df)
-        
-        if frames:
-            df_view = pd.concat(frames, ignore_index=True)
-            df_view = df_view[(df_view["classe"] == classe) & (df_view["page"] <= page)]
-            return df_view.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
-        else:
-            return pd.DataFrame()
-
-
 # ============================ App ============================
 def main() -> None:
     st.set_page_config(page_title="Wortschatz-Spiele (7–9)", page_icon="🎯", layout="centered")
