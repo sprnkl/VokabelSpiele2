@@ -128,13 +128,10 @@ document.addEventListener('DOMContentLoaded',startGame);
 
 # ============================ Robuster Loader ============================
 @st.cache_data(show_spinner=False)
-def load_vocab(data_dir: os.PathL ike | str) -> pd.DataFrame:
+def get_all_vocab_file_paths(data_dir: os.PathLike | str) -> list[Path]:
     """
-    Liest alle CSVs aus data_dir.
-    - Trennzeichen auto (sep=None, engine="python")
-    - Spalten normalisiert: classe, page, de, en.
-    - Für Dateien in data/pages/klasseK/klasseK_pageS.csv:
-      classe/page AUS DEM DATEINAMEN erzwingen.
+    Sucht rekursiv nach allen CSV-Dateipfaden in data_dir und gibt sie zurück.
+    Liest noch keine Daten ein.
     """
     base = Path(data_dir)
     paths: list[Path] = []
@@ -143,70 +140,60 @@ def load_vocab(data_dir: os.PathL ike | str) -> pd.DataFrame:
             if fn.lower().endswith(".csv"):
                 paths.append(Path(root) / fn)
     if not paths:
-        raise FileNotFoundError(f"Keine CSV-Dateien in {base.resolve()}")
+        raise FileNotFoundError(f"Keine CSV-Dateien in {base.resolve()} gefunden.")
+    return paths
 
+def load_and_preprocess_df(path: Path) -> pd.DataFrame:
+    """
+    Liest eine einzelne CSV-Datei und normalisiert ihre Spalten.
+    """
+    try:
+        df = pd.read_csv(path, sep=None, engine="python")
+    except Exception as e:
+        st.warning(f"CSV-Fehler {path.name}: {e}")
+        return pd.DataFrame()
+
+    # Spaltennamen vereinheitlichen
+    col_map = {}
+    for c in df.columns:
+        lc = str(c).strip().lower()
+        if lc in {"klasse", "class", "classe"}:
+            col_map[c] = "classe"
+        elif lc in {"page", "seite"}:
+            col_map[c] = "page"
+        elif lc in {"de", "deutsch", "german"}:
+            col_map[c] = "de"
+        elif lc in {"en", "englisch", "english"}:
+            col_map[c] = "en"
+    df = df.rename(columns=col_map)
+    
+    # Pfadinformation hinzufügen
+    sp = str(path).replace("\\", "/")
+    df["source_path"] = sp
+    df["source_is_page"] = "/data/pages/" in sp.lower()
+
+    # Fehlende Pflichtspalten ergänzen
+    if "classe" not in df.columns: df["classe"] = ""
+    if "page" not in df.columns: df["page"] = None
+    if "de" not in df.columns: df["de"] = ""
+    if "en" not in df.columns: df["en"] = ""
+
+    # Typen & säubern
+    df["classe"] = df["classe"].astype(str)
+    df["page"] = pd.to_numeric(df["page"], errors="coerce").astype("Int64")
+    df["de"] = df["de"].astype(str)
+    df["en"] = df["en"].astype(str)
+    df = df[(df["de"].str.strip() != "") & (df["en"].str.strip() != "")]
+    
+    # Härte Robustheit: Klasse/Seite aus Dateipfad erzwingen (nur pages/)
     page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
+    m = page_pattern.search(sp.lower())
+    if m:
+        k, pg = m.group(1), m.group(2)
+        df["classe"] = str(int(k))
+        df["page"] = int(pg)
 
-    frames = []
-    for p in paths:
-        try:
-            df = pd.read_csv(p, sep=None, engine="python")
-        except Exception as e:
-            st.warning(f"CSV-Fehler {p.name}: {e}")
-            continue
-
-        # Spaltennamen vereinheitlichen
-        col_map = {}
-        for c in df.columns:
-            lc = str(c).strip().lower()
-            if lc in {"klasse", "class", "classe"}:
-                col_map[c] = "classe"
-            elif lc in {"page", "seite"}:
-                col_map[c] = "page"
-            elif lc in {"de", "deutsch", "german"}:
-                col_map[c] = "de"
-            elif lc in {"en", "englisch", "english"}:
-                col_map[c] = "en"
-        df = df.rename(columns=col_map)
-
-        sp = str(p).replace("\\", "/")
-        df["source_path"] = sp
-        df["source_is_page"] = ("/data/pages/" in sp.lower()) or ("/pages/" in sp.lower())
-
-        # HARTE ROBUSTHEIT: classe/page aus Dateipfad erzwingen (nur pages/)
-        m = page_pattern.search(sp.lower())
-        if m:
-            k, pg = m.group(1), m.group(2)
-            df["classe"] = str(int(k))
-            df["page"] = int(pg)
-
-        # Fehlende Pflichtspalten ergänzen
-        if "classe" not in df.columns:
-            df["classe"] = ""
-        if "page" not in df.columns:
-            df["page"] = None
-        if "de" not in df.columns:
-            df["de"] = ""
-        if "en" not in df.columns:
-            df["en"] = ""
-
-        # Typen & säubern
-        df["classe"] = df["classe"].astype(str)
-        df["page"] = pd.to_numeric(df["page"], errors="coerce").astype("Int64")
-        df["de"] = df["de"].astype(str)
-        df["en"] = df["en"].astype(str)
-        df = df[(df["de"].str.strip() != "") & (df["en"].str.strip() != "")]
-        frames.append(df)
-
-    if not frames:
-        raise ValueError("Keine gültigen Daten geladen.")
-
-    all_df = pd.concat(frames, ignore_index=True)
-    # Nur Klassen 7–9
-    all_df = all_df[all_df["classe"].isin({"7", "8", "9"})]
-    # Dubletten nur auf exakt identische Einträge entfernen
-    all_df = all_df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
-    return all_df
+    return df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
 
 # ============================ App ============================
 def main() -> None:
@@ -223,17 +210,19 @@ def main() -> None:
 
     DATA_DIR = Path(__file__).parent / "data"
     try:
-        df = load_vocab(DATA_DIR)
+        all_file_paths = get_all_vocab_file_paths(DATA_DIR)
+        df_full = pd.concat([load_and_preprocess_df(p) for p in all_file_paths], ignore_index=True)
+        df_full = df_full[df_full["classe"].isin({"7", "8", "9"})]
     except Exception as e:
         st.error(f"Fehler beim Laden der Daten: {e}")
         return
 
-    classes = sorted(df["classe"].unique(), key=lambda x: int(x))
+    classes = sorted(df_full["classe"].unique(), key=lambda x: int(x))
     if not classes:
         st.warning("Keine Klassen gefunden."); return
 
     classe = st.selectbox("Klasse", classes, format_func=lambda x: f"Klasse {x}")
-    df_class = df[df["classe"] == classe]
+    df_class = df_full[df_full["classe"] == classe]
     pages = sorted(df_class["page"].dropna().unique())
     if not pages:
         st.warning("Keine Seiten für diese Klasse gefunden."); return
@@ -241,23 +230,19 @@ def main() -> None:
     page = st.selectbox("Seite", pages, index=0)
     mode = st.radio("Umfang", ["Nur diese Seite", "Bis einschließlich dieser Seite"], horizontal=True)
 
-    # --- Umfang-Filter ---
+    # --- Dynamischer Umfang-Filter ---
     if mode == "Nur diese Seite":
-        # Korrigierte Logik: Filtert zuerst strikt nach Seite, dann nur die Daten
-        # aus pages/
-        df_view_page = df[(df["classe"] == classe) & (df["page"] == page)]
-        
-        mask_exact = (df_view_page["source_is_page"] == True)
-        exact = df_view_page[mask_exact]
-        
-        if len(exact) > 0:
-            df_view = exact
-            st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
-        else:
-            df_view = df_view_page
+        # Priorität für spezifische pages-Dateien
+        df_view = df_full[(df_full["classe"] == classe) & (df_full["page"] == page) & (df_full["source_is_page"] == True)]
+
+        # Wenn keine spezifischen Dateien gefunden, nehme alle für die Seite
+        if df_view.empty:
+            df_view = df_full[(df_full["classe"] == classe) & (df_full["page"] == page)]
             st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
+        else:
+            st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
     else:
-        df_view = df[(df["classe"] == classe) & (df["page"] <= page)]
+        df_view = df_full[(df_full["classe"] == classe) & (df_full["page"] <= page)]
 
     st.write(f"**Vokabeln verfügbar**: {len(df_view)}")
     if df_view.empty:
@@ -367,7 +352,7 @@ def main() -> None:
 
         if st_state["index"] >= len(st_state["order"]):
             st.success(f"Serie beendet! {st_state['score']} von {st_state['total']} richtig.")
-            if st_state["results"]:
+            if st.session_state[key]["results"]:
                 t = pd.DataFrame(st_state["results"]); t.index += 1
                 st.table(t.rename(columns={"de":"Deutsch","answer":"Deine Antwort","en":"Richtig","correct":"Korrekt"}))
             if st.button("Neue Serie"): st.session_state.pop(key, None); st.rerun()
@@ -404,7 +389,7 @@ def main() -> None:
                         st_state["index"] = len(st_state["order"]); st.session_state[key] = st_state; st.rerun()
                 st.write(f"Frage {st_state['index'] + 1} / {len(st_state['order'])} – Punkte: {st_state['score']} / {st_state['total']}")
 
-    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Insgesamt geladene Vokabeln: {len(df)}")
+    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Insgesamt geladene Vokabeln: {len(df_full)}")
 
 if __name__ == "__main__":
     main()
