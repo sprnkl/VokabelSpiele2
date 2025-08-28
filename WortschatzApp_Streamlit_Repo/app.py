@@ -7,14 +7,13 @@ Vereinfachte, robuste Version:
 - Nach dem Laden wird zusätzlich zeilenweise auf (classe==K, page==S) gefiltert.
 - CSVs werden rekursiv aus data/ geladen, Trennzeichen automatisch (Komma/Semikolon).
 - Spalten werden normalisiert auf: classe, page, de, en.
-- Spiele: Galgenmännchen (Hangman), Wörter ziehen (Drag & Drop), Eingabe (DE→EN).
+- Spiele: Hangman (Galgenmännchen), Wörter ziehen (Drag & Drop), Eingabe (DE→EN).
 - Optionaler Filter: "Nur Einzelwörter".
 
 Neu:
-- "Wörter ziehen": Timer (Start/Pause/Reset), englische Meldungen, "Show solution", Gratulation + Zeit
-- "Eingabe (DE→EN)": Timer (Start/Pause/Reset), englische Meldungen, History-Tabelle (Correct/Wrong),
-  "Show solution" zeigt DE — EN
-- "Hangman": Timer (Start/Pause/Reset), "Show solution", "Show German hint" (optional), Gratulation + Zeit
+- Hangman: Sequenzielles „Next word“ (kein Wiederholen bis alle durch), Timer, Congrats+Time, Show solution, Show German hint (optional)
+- Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN) außerhalb des Canvas
+- Eingabe (DE→EN): Enter zum Prüfen (Form), History-Tabelle live, Show solution (DE — EN)
 """
 
 import re
@@ -172,154 +171,188 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
 
     df = df[["classe", "page", "de", "en"]].copy()
     df["de"] = df["de"].astype(str).str.strip()
-    df["en"] = df["en"].astype(str).str.strip()
+    df["en"] = df["en"].astype str).str.strip()
     df = df.dropna(how="all", subset=["de", "en"])
     return df
 
 
 # ============================ Spiele-UI ============================
 
+def _timer_block(label_prefix: str, timer: dict, rerun_key: str, extra_reset: callable | None = None):
+    """Timer-UI (Start/Pause/Reset)."""
+    now_ms = int(time.time() * 1000)
+    current_ms = timer["elapsed_ms"] + (now_ms - timer["started_ms"] if timer["running"] else 0)
+
+    colT1, colT2, colT3, colT4 = st.columns([1.2, 1, 1, 1])
+    with colT1:
+        st.metric(f"{label_prefix} Time", fmt_ms(current_ms))
+    with colT2:
+        if st.button("Start", key=f"{rerun_key}_start"):
+            if not timer["running"]:
+                timer["running"] = True
+                timer["started_ms"] = int(time.time() * 1000) - timer["elapsed_ms"]
+                st.rerun()
+    with colT3:
+        if st.button("Pause", key=f"{rerun_key}_pause"):
+            if timer["running"]:
+                now_ms = int(time.time() * 1000)
+                timer["elapsed_ms"] = now_ms - timer["started_ms"]
+                timer["running"] = False
+                st.rerun()
+    with colT4:
+        if st.button("Reset", key=f"{rerun_key}_reset"):
+            timer["running"] = False
+            timer["started_ms"] = 0
+            timer["elapsed_ms"] = 0
+            if extra_reset:
+                extra_reset()
+            st.rerun()
+
+
+# ---------- Hangman ----------
+
 def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
     """
     Hangman mit:
     - Timer (Start/Pause/Reset)
-    - optionalem deutschen Hinweis ("Show German hint")
-    - "Show solution"
-    - Gratulation + Zeit bei Erfolg
+    - optionalem deutschen Hinweis (Show German hint)
+    - Show solution
+    - Congrats + Time
+    - Next word (Sequenz über gemischte Reihenfolge, kein Wiederholen bis alle durch)
     """
-    key = f"hangman_{classe}_{page}_{seed_val}"
+    key = f"hangman_{classe}_{page}"
     state = st.session_state.get(key)
-    rnd = random.Random(seed_val if seed_val else None)
 
+    rows = df_view.to_dict("records")
+    if not rows:
+        st.info("No vocabulary available.")
+        return
+
+    # Initialisieren / Reihenfolge vorbereiten
     if state is None:
-        if not df_view.empty:
-            row = rnd.choice(df_view.to_dict("records"))
-            state = {
-                "solution": row["en"],
-                "hint": row["de"],
-                "guessed": set(),
-                "fails": 0,
-                "solved": False,
-                "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
-                "show_hint": False,
-            }
-            st.session_state[key] = state
-        else:
-            st.info("No vocabulary available.")
-            return
+        order = list(range(len(rows)))
+        rnd = random.Random(seed_val) if seed_val else random.Random()
+        rnd.shuffle(order)
+        idx = 0
+        row = rows[order[idx]]
+        state = {
+            "order": order,
+            "idx": idx,
+            "solution": row["en"],
+            "hint": row["de"],
+            "guessed": set(),
+            "fails": 0,
+            "solved": False,
+            "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
+            "show_hint": False,
+        }
+        st.session_state[key] = state
+
+    # Helper zum nächsten Wort
+    def next_word():
+        t = state["timer"]
+        # Timer reset
+        t["running"] = False
+        t["started_ms"] = 0
+        t["elapsed_ms"] = 0
+        # Index erhöhen
+        state["idx"] += 1
+        if state["idx"] >= len(rows):
+            # alles durch -> neu mischen
+            order = list(range(len(rows)))
+            rnd = random.Random(seed_val) if seed_val else random.Random()
+            rnd.shuffle(order)
+            state["order"] = order
+            state["idx"] = 0
+        i = state["order"][state["idx"]]
+        state["solution"] = rows[i]["en"]
+        state["hint"] = rows[i]["de"]
+        state["guessed"] = set()
+        state["fails"] = 0
+        state["solved"] = False
+        st.session_state[key] = state
 
     solution, hint = state["solution"], state["hint"]
-    guessed, fails, solved = state["guessed"], state["fails"], state["solved"]
     t = state["timer"]
 
-    # ----- TIMER -----
-    now_ms = int(time.time() * 1000)
-    current_ms = t["elapsed_ms"] + (now_ms - t["started_ms"] if t["running"] else 0)
+    # Timer-Block
+    _timer_block("Hangman", t, rerun_key=f"{key}_timer")
 
-    colT1, colT2, colT3, colT4, colT5 = st.columns([1.2, 1, 1, 1, 1.6])
-    with colT1:
-        st.metric("Time", fmt_ms(current_ms))
-    with colT2:
-        if st.button("Start", disabled=solved):
-            if not t["running"]:
-                t["running"] = True
-                t["started_ms"] = int(time.time() * 1000) - t["elapsed_ms"]
-                st.session_state[key] = state
-                st.rerun()
-    with colT3:
-        if st.button("Pause", disabled=solved):
-            if t["running"]:
-                now_ms = int(time.time() * 1000)
-                t["elapsed_ms"] = now_ms - t["started_ms"]
-                t["running"] = False
-                st.session_state[key] = state
-                st.rerun()
-    with colT4:
-        if st.button("Reset timer"):
-            t["running"] = False
-            t["started_ms"] = 0
-            t["elapsed_ms"] = 0
-            st.session_state[key] = state
-            st.rerun()
-    with colT5:
-        state["show_hint"] = st.checkbox("Show German hint", value=state.get("show_hint", False), disabled=solved)
+    # Hint/Optionen
+    opt1, opt2 = st.columns(2)
+    with opt1:
+        state["show_hint"] = st.checkbox("Show German hint", value=state.get("show_hint", False), key=f"{key}_showhint")
         st.session_state[key] = state
-
-    cA, cB = st.columns([1, 1])
-    with cA:
-        st.text(HANGMAN_PICS[min(fails, len(HANGMAN_PICS)-1)])
-    with cB:
         if state["show_hint"]:
             st.write(f"**German (hint):** {hint}")
-        if st.button("Show solution"):
+    with opt2:
+        if st.button("Show solution", key=f"{key}_showsol"):
             st.info(f"Solution: {solution}")
 
-    def _display_word():
-        return " ".join([c if (not c.isalpha() or c.lower() in guessed) else "_" for c in solution])
+    # Galgen + Wortanzeige
+    cA, cB = st.columns([1, 2])
+    with cA:
+        st.text(HANGMAN_PICS[min(state["fails"], len(HANGMAN_PICS)-1)])
+    with cB:
+        display_word = " ".join([c if (not c.isalpha() or c.lower() in state["guessed"]) else "_" for c in solution])
+        st.write("**Word (EN):** " + display_word)
 
-    st.write("**Word (EN):** " + _display_word())
+        # Volleingabe als Form -> Enter genügt
+        with st.form(key=f"hang_form_{key}"):
+            full_guess = st.text_input("Type the full word (English):", key=f"{key}_full")
+            submitted = st.form_submit_button("Check (Enter)")
+            if submitted and not state["solved"]:
+                if normalize_text(full_guess) == normalize_text(solution):
+                    # Erfolg
+                    if t["running"]:
+                        now_ms2 = int(time.time() * 1000)
+                        t["elapsed_ms"] = now_ms2 - t["started_ms"]
+                        t["running"] = False
+                    state["solved"] = True
+                    st.session_state[key] = state
+                    st.success(f"Congratulations! You solved it. Time: {fmt_ms(t['elapsed_ms'])}")
+                else:
+                    st.warning("Not correct.")
+                st.rerun()
 
-    def _finish_success():
-        # Stop timer and congratulate
-        if t["running"]:
-            now_ms2 = int(time.time() * 1000)
-            t["elapsed_ms"] = now_ms2 - t["started_ms"]
-            t["running"] = False
-        state["solved"] = True
-        st.session_state[key] = state
-        st.success(f"Congratulations! You solved it. Time: {fmt_ms(t['elapsed_ms'])}")
-        if st.button("Play again"):
-            # New random word; reset state
-            row2 = rnd.choice(df_view.to_dict("records"))
-            st.session_state[key] = {
-                "solution": row2["en"],
-                "hint": row2["de"],
-                "guessed": set(),
-                "fails": 0,
-                "solved": False,
-                "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
-                "show_hint": False,
-            }
+    # Buchstaben-Buttons
+    if not state["solved"]:
+        alphabet = list("abcdefghijklmnopqrstuvwxyz")
+        for chunk in [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]:
+            cols = st.columns(len(chunk))
+            for letter, col in zip(chunk, cols):
+                with col:
+                    if st.button(letter, key=f"{key}_btn_{letter}", disabled=(letter in state["guessed"])):
+                        if letter in normalize_text(solution):
+                            state["guessed"].add(letter)
+                        else:
+                            state["fails"] += 1
+                        st.session_state[key] = state
+                        # Erfolg durch Buchstaben?
+                        if all((not c.isalpha()) or (c.lower() in state["guessed"]) for c in solution):
+                            if t["running"]:
+                                now_ms2 = int(time.time() * 1000)
+                                t["elapsed_ms"] = now_ms2 - t["started_ms"]
+                                t["running"] = False
+                            state["solved"] = True
+                            st.session_state[key] = state
+                            st.success(f"Congratulations! You solved it. Time: {fmt_ms(t['elapsed_ms'])}")
+                        st.rerun()
+    else:
+        # solved -> Next word
+        if st.button("Next word", key=f"{key}_nextword"):
+            next_word()
             st.rerun()
 
-    # Full-word guess
-    with st.form(key=f"full_form_{key}"):
-        full_guess = st.text_input("Type the full word (English):", key=f"full_guess_{key}", disabled=solved)
-        submitted = st.form_submit_button("Check", disabled=solved)
-        if submitted:
-            if normalize_text(full_guess) == normalize_text(solution):
-                _finish_success()
-                return
-            else:
-                st.warning("Not correct.")
 
-    # Alphabet buttons
-    alphabet = list("abcdefghijklmnopqrstuvwxyz")
-    rows = [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]
-    for rletters in rows:
-        cols = st.columns(len(rletters))
-        for letter, col in zip(rletters, cols):
-            with col:
-                if st.button(letter, key=f"{key}_btn_{letter}", disabled=(letter in guessed) or solved):
-                    if letter in normalize_text(solution):
-                        guessed.add(letter)
-                    else:
-                        fails += 1
-                    state["guessed"], state["fails"] = guessed, fails
-                    st.session_state[key] = state
-                    # Check success by letters
-                    if all((not c.isalpha()) or (c.lower() in guessed) for c in solution):
-                        _finish_success()
-                        return
-                    st.rerun()
+# ---------- Wörter ziehen (Drag & Drop) ----------
 
-
-def game_drag_pairs(df_view: pd.DataFrame, show_solution: bool):
+def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
     """
     Drag&Drop-Paare-Spiel (DE ↔ EN) per HTML/JS mit:
-    - Timer (Start / Pause / Reset)
-    - „Show solution“ (reveal all pairs)
+    - Timer (Start/Pause/Reset)
     - Congratulations + time at the end (English messages)
+    - Show solution als Tabelle (DE — EN) außerhalb des Canvas
     """
     pairs = [
         {"id": i, "de": r["de"], "en": r["en"]}
@@ -333,8 +366,12 @@ def game_drag_pairs(df_view: pd.DataFrame, show_solution: bool):
     st.write("Drag the matching cards together (DE ↔ EN).")
     st.caption("Tip: Use 'Shuffle' to restart.")
 
+    # Optional: Lösung als Tabelle (DE — EN)
+    if show_solution_table:
+        st.subheader("Solution (DE — EN)")
+        st.dataframe(pd.DataFrame(pairs)[["de", "en"]].rename(columns={"de":"DE", "en":"EN"}), use_container_width=True)
+
     pairs_json = json.dumps(pairs, ensure_ascii=False)
-    show_solution_js = "true" if show_solution else "false"
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -354,7 +391,6 @@ body {{ font-family:Arial, sans-serif; margin:0; padding:10px; background:#f6f7f
   padding:10px; margin:5px; cursor:grab; user-select:none; min-width:120px;
 }}
 .correct {{ background:#e8f5e9; border-color:var(--success); cursor:default; }}
-.pairrow {{ display:flex; gap:8px; align-items:center; margin-bottom:6px; }}
 #result {{ margin-top:10px; font-weight:bold; color:#2e7d32; }}
 </style>
 </head>
@@ -365,7 +401,6 @@ body {{ font-family:Arial, sans-serif; margin:0; padding:10px; background:#f6f7f
   <button class="btn" id="pauseBtn">Pause</button>
   <button class="btn" id="resetBtn">Reset</button>
   <button class="btn" id="shuffleBtn">Shuffle</button>
-  <button class="btn" id="solutionBtn">Show solution</button>
 </div>
 
 <div id="box" class="grid"></div>
@@ -373,7 +408,6 @@ body {{ font-family:Arial, sans-serif; margin:0; padding:10px; background:#f6f7f
 
 <script>
 const pairs = {pairs_json};
-let SHOW_SOLUTION = {show_solution_js};
 
 let draggedCard = null;
 let running = false;
@@ -490,23 +524,6 @@ function layoutShuffled() {{
   }}
 }}
 
-function layoutSolution() {{
-  clearBoard();
-  const box = document.getElementById('box');
-  for (const p of pairs) {{
-    const row = document.createElement('div');
-    row.className = 'pairrow';
-    const a = createCard(p.de, p.id);
-    const b = createCard(p.en, p.id);
-    a.draggable = false; b.draggable = false;
-    markCorrect(a); markCorrect(b);
-    row.appendChild(a);
-    row.appendChild(b);
-    box.appendChild(row);
-  }}
-  document.getElementById('result').textContent = "Solution revealed.";
-}}
-
 function checkWin() {{
   if (correctPairs === pairs.length && !solved) {{
     solved = true;
@@ -520,16 +537,11 @@ function checkWin() {{
 
 document.getElementById('startBtn').addEventListener('click', () => startTimer());
 document.getElementById('pauseBtn').addEventListener('click', () => pauseTimer());
-document.getElementById('resetBtn').addEventListener('click', () => {{ resetTimer(); if(!SHOW_SOLUTION) layoutShuffled(); }});
+document.getElementById('resetBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
 document.getElementById('shuffleBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
-document.getElementById('solutionBtn').addEventListener('click', () => {{ SHOW_SOLUTION = true; resetTimer(); layoutSolution(); }});
 
 // Initial
-if ({show_solution_js}) {{
-  layoutSolution();
-}} else {{
-  layoutShuffled();
-}}
+layoutShuffled();
 </script>
 </body>
 </html>"""
@@ -537,12 +549,15 @@ if ({show_solution_js}) {{
     st.components.v1.html(html, height=580, scrolling=True)
 
 
+# ---------- Eingabe (DE → EN) ----------
+
 def game_input(df_view: pd.DataFrame, classe: str, page: int):
     """
     Eingabespiel: Deutsch anzeigen, Englisch tippen.
-    - Timer (Start/Pause/Reset) – English messages at the end
-    - History table of attempts (DE, Your answer, EN (correct), Result)
-    - "Show solution" displays DE — EN
+    - Timer (Start/Pause/Reset) – English end message
+    - History table (DE, Your answer, EN (correct), Result) live
+    - Show solution shows DE — EN
+    - Enter genügt (Form)
     """
     rows = df_view.to_dict("records")
     random.shuffle(rows)
@@ -560,45 +575,16 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
         }
         st.session_state[state_key] = st_state
 
-    # ----- TIMER -----
-    t = st_state["timer"]
-    now_ms = int(time.time() * 1000)
-    current_ms = t["elapsed_ms"] + (now_ms - t["started_ms"] if t["running"] else 0)
+    # Timer-Block
+    _timer_block("Input", st_state["timer"], rerun_key=f"{state_key}_timer")
 
-    colT1, colT2, colT3, colT4 = st.columns([1, 1, 1, 2])
-    with colT1:
-        st.metric("Time", fmt_ms(current_ms))
-    with colT2:
-        if st.button("Start"):
-            if not t["running"]:
-                t["running"] = True
-                t["started_ms"] = int(time.time() * 1000) - t["elapsed_ms"]
-                st.session_state[state_key] = st_state
-                st.rerun()
-    with colT3:
-        if st.button("Pause"):
-            if t["running"]:
-                now_ms = int(time.time() * 1000)
-                t["elapsed_ms"] = now_ms - t["started_ms"]
-                t["running"] = False
-                st.session_state[state_key] = st_state
-                st.rerun()
-    with colT4:
-        if st.button("Reset"):
-            t["running"] = False
-            t["started_ms"] = 0
-            t["elapsed_ms"] = 0
-            st.session_state[state_key] = st_state
-            st.rerun()
-
-    # ----- GAME LOOP -----
+    # Ende?
     i = st_state["index"]
     if i >= len(rows):
-        # Finished
+        t = st_state["timer"]
         final_ms = t["elapsed_ms"] + (int(time.time()*1000) - t["started_ms"] if t["running"] else 0)
         t["running"] = False
         st.success(f"Congratulations! You finished. Score: {st_state['score']} / {st_state['total']} — Time: {fmt_ms(final_ms)}")
-
         if st_state["history"]:
             df_hist = pd.DataFrame(st_state["history"])
             df_hist["Result"] = df_hist["correct"].map({True: "Correct", False: "Wrong"})
@@ -607,35 +593,43 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
             st.dataframe(df_hist, use_container_width=True)
         return
 
-    # Current item
+    # Aktueller Eintrag
     row = rows[st_state["order"][i]]
     st.write(f"**German (DE):** {row['de']}")
-    user = st.text_input("English (EN):", key=f"user_{state_key}_{i}")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("Check"):
-            st_state["total"] += 1
-            ok = normalize_text(user) == normalize_text(row["en"])
-            if ok:
-                st_state["score"] += 1
-                st.success("Correct!")
-            else:
-                st.warning("Wrong.")
-            st_state["history"].append({"de": row["de"], "user": user, "en": row["en"], "correct": ok})
-            st_state["index"] += 1
-            st.session_state[state_key] = st_state
-            st.rerun()
-    with c2:
-        if st.button("Show solution"):
-            st.info(f"Solution: {row['de']} — {row['en']}")
-    with c3:
-        if st.button("Finish now"):
-            # Jump to end (will show final result and time)
-            st_state["index"] = len(rows)
-            st.session_state[state_key] = st_state
-            st.rerun()
 
-    # Live history preview while playing
+    # Form: Enter zum Prüfen
+    with st.form(key=f"input_form_{state_key}_{i}", clear_on_submit=True):
+        user = st.text_input("English (EN):", key=f"user_{state_key}_{i}")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            submitted = st.form_submit_button("Check (Enter)")
+        with c2:
+            show_sol_clicked = st.form_submit_button("Show solution")
+        with c3:
+            finish_now = st.form_submit_button("Finish now")
+
+    if submitted:
+        st_state["total"] += 1
+        ok = normalize_text(user) == normalize_text(row["en"])
+        if ok:
+            st_state["score"] += 1
+            st.success("Correct!")
+        else:
+            st.warning("Wrong.")
+        st_state["history"].append({"de": row["de"], "user": user, "en": row["en"], "correct": ok})
+        st_state["index"] += 1
+        st.session_state[state_key] = st_state
+        st.rerun()
+
+    if show_sol_clicked:
+        st.info(f"Solution: {row['de']} — {row['en']}")
+
+    if finish_now:
+        st_state["index"] = len(rows)
+        st.session_state[state_key] = st_state
+        st.rerun()
+
+    # Live-History
     if st_state["history"]:
         df_hist = pd.DataFrame(st_state["history"])
         df_hist["Result"] = df_hist["correct"].map({True: "Correct", False: "Wrong"})
@@ -728,13 +722,13 @@ def main():
             return
 
     seed_val = st.text_input("Seed (optional – gleiche Reihenfolge für alle)", value="")
-    game = st.selectbox("Wähle ein Spiel", ("Galgenmännchen", "Wörter ziehen", "Eingabe (DE → EN)"))
+    game = st.selectbox("Wähle ein Spiel", ("Hangman", "Wörter ziehen", "Eingabe (DE → EN)"))
 
-    if game == "Galgenmännchen":
+    if game == "Hangman":
         game_hangman(df_view, classe, page, seed_val)
     elif game == "Wörter ziehen":
-        show_solution = st.checkbox("Show solution (reveal all pairs)", value=False)
-        game_drag_pairs(df_view, show_solution=show_solution)
+        show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
+        game_drag_pairs(df_view, show_solution_table=show_solution_table)
     else:
         game_input(df_view, classe, page)
 
