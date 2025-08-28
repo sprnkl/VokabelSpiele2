@@ -14,6 +14,29 @@ import os
 import re
 import json
 import unicodedata
+import pandas as pd
+
+def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int, inclusive: bool) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    # normalize column names if needed
+    cols = {c.lower(): c for c in df.columns}
+    c_classe = cols.get("classe")
+    c_page = cols.get("page")
+    if c_classe is None or c_page is None:
+        return df
+    try:
+        df = df.copy()
+        df[c_classe] = pd.to_numeric(df[c_classe], errors="coerce").astype("Int64")
+        df[c_page]   = pd.to_numeric(df[c_page],   errors="coerce").astype("Int64")
+        if inclusive:
+            mask = (df[c_classe] == int(classe)) & (df[c_page] <= int(page))
+        else:
+            mask = (df[c_classe] == int(classe)) & (df[c_page] == int(page))
+        return df[mask].reset_index(drop=True)
+    except Exception:
+        return df
+
 import random
 from datetime import datetime
 from pathlib import Path
@@ -259,6 +282,7 @@ def main() -> None:
 
         if not page_specific_paths.empty:
             df_view = load_and_preprocess_df(page_specific_paths.iloc[0])
+            df_view = _filter_by_page_rows(df_view, int(classe), int(page), inclusive=False)
             st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
         else:
             # Fallback to general files
@@ -269,6 +293,7 @@ def main() -> None:
             ]['path']
             if not general_paths.empty:
                 df_view = pd.concat([load_and_preprocess_df(p) for p in general_paths], ignore_index=True)
+                df_view = _filter_by_page_rows(df_view, int(classe), int(page), inclusive=False)
             else:
                 df_view = pd.DataFrame()
             st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
@@ -280,6 +305,7 @@ def main() -> None:
         ]['path']
         if not relevant_paths.empty:
             df_view = pd.concat([load_and_preprocess_df(p) for p in relevant_paths], ignore_index=True)
+            df_view = _filter_by_page_rows(df_view, int(classe), int(page), inclusive=True)
         else:
             df_view = pd.DataFrame()
     
