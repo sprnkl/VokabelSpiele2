@@ -1,78 +1,39 @@
 """
 Wortschatz-Spiele (Klassen 7–9)
 
-Robust:
+Vereinfachte, robuste Version:
+- Nur "Nur diese Seite": Es werden ausschließlich seiten-spezifische CSVs genutzt
+  (data/pages/klasseK/klasseK_pageS.csv). Kein "bis einschließlich"-Modus.
+- Nach dem Laden wird zusätzlich zeilenweise auf (classe==K, page==S) gefiltert.
 - CSVs werden rekursiv aus data/ geladen, Trennzeichen automatisch (Komma/Semikolon).
-- Spalten normalisiert: classe, page, de, en.
-- Für Dateien unter data/pages/klasseK/klasseK_pageS.csv werden classe/page
-  strikt aus dem Dateinamen abgeleitet (verhindert falsche Seitenzuordnung).
+- Spalten werden normalisiert auf: classe, page, de, en.
 - Spiele: Galgenmännchen, Wörter ziehen (Drag & Drop), Eingabe (DE→EN).
-- Filter: "Nur Einzelwörter".
+- Optionaler Filter: "Nur Einzelwörter".
 """
 
 import os
 import re
 import json
 import unicodedata
-import pandas as pd
-
-def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int, inclusive: bool) -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-    # normalize column names if needed
-    cols = {c.lower(): c for c in df.columns}
-    c_classe = cols.get("classe")
-    c_page = cols.get("page")
-    if c_classe is None or c_page is None:
-        return df
-    try:
-        df = df.copy()
-        df[c_classe] = pd.to_numeric(df[c_classe], errors="coerce").astype("Int64")
-        df[c_page]   = pd.to_numeric(df[c_page],   errors="coerce").astype("Int64")
-        if inclusive:
-            mask = (df[c_classe] == int(classe)) & (df[c_page] <= int(page))
-        else:
-            mask = (df[c_classe] == int(classe)) & (df[c_page] == int(page))
-        return df[mask].reset_index(drop=True)
-    except Exception:
-        return df
-
-import random
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
+import random
 
 import pandas as pd
 import streamlit as st
-from streamlit import components
 
-# ============================ Hangman Pictures ============================
-HANGMAN_PICS = [
-    "",
-    "\n\n\n\n\n\n----",
-    "\n\n\n\n\n |\n----",
-    "\n\n\n\n  |\n  |\n----",
-    "\n  O\n\n\n  |\n----",
-    "\n  O\n  |\n\n  |\n----",
-    "\n  O\n /|\n\n  |\n----",
-    "\n  O\n /|\n / \n  |\n----",
-    "\n  O\n /|\n / \n  |\n / \\\n----",
-]
 
-# ============================ Helper Functions ============================
+# ============================ Utilities ============================
+
 def normalize_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
     s = s.strip().lower()
-    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-    s = " ".join(s.split())
+    s = unicodedata.normalize("NFKD", s)
+    s = re.sub(r"[^\w\s-]", "", s)
+    s = re.sub(r"\s+", " ", s)
     return s
 
-def answers_equal(user_answer: str, correct: str) -> bool:
-    a_norm = normalize_text(user_answer)
-    for variant in str(correct).split("/"):
-        if a_norm == normalize_text(variant):
-            return True
-    return False
 
 def is_simple_word(
     word: str,
@@ -81,6 +42,7 @@ def is_simple_word(
     ignore_abbrev: bool = True,
     min_length: int = 2,
 ) -> bool:
+    """Heuristik: nur simple Einzelwörter zulassen (für Lernspiele nützlich)."""
     if not isinstance(word, str):
         return False
     w = word.strip()
@@ -94,7 +56,171 @@ def is_simple_word(
         return False
     return len(w) >= min_length
 
-def _render_word_drag(pairs):
+
+def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFrame:
+    """
+    Erzwinge zeilenweises Filtern: nur genau die gewählte Seite und Klasse.
+    (Schützt vor CSVs, die versehentlich mehrere Seiten enthalten.)
+    """
+    if df is None or df.empty:
+        return df
+    cols = {c.lower(): c for c in df.columns}
+    c_classe = cols.get("classe")
+    c_page = cols.get("page")
+    if c_classe is None or c_page is None:
+        return df
+    try:
+        df = df.copy()
+        df[c_classe] = pd.to_numeric(df[c_classe], errors="coerce").astype("Int64")
+        df[c_page]   = pd.to_numeric(df[c_page],   errors="coerce").astype("Int64")
+        mask = (df[c_classe] == int(classe)) & (df[c_page] == int(page))
+        return df[mask].reset_index(drop=True)
+    except Exception:
+        return df
+
+
+# ============================ Hangman Art ============================
+
+HANGMAN_PICS = [
+    " +---+\n     |\n     |\n     |\n    ===",
+    " +---+\n O   |\n     |\n     |\n    ===",
+    " +---+\n O   |\n |   |\n     |\n    ===",
+    " +---+\n O   |\n/|   |\n     |\n    ===",
+    " +---+\n O   |\n/|\\  |\n     |\n    ===",
+    " +---+\n O   |\n/|\\  |\n/    |\n    ===",
+    " +---+\n O   |\n/|\\  |\n/ \\  |\n    ===",
+]
+
+
+# ============================ CSV-Erkennung & Laden ============================
+
+@st.cache_data(show_spinner=False)
+def get_vocab_file_info(data_dir: os.PathLike | str) -> pd.DataFrame:
+    """
+    Scannt das data-Verzeichnis und liefert Metadaten zu CSVs:
+    - 'is_page_specific' == True, wenn der Pfad dem Muster data/pages/klasseK/klasseK_pageS.csv entspricht.
+    - Wir behalten nur Klassen 7–9.
+    """
+    file_info = []
+    base = Path(data_dir)
+    # exakt: .../data/pages/klasse9/klasse9_page157.csv
+    page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
+
+    for path in base.glob("**/*.csv"):
+        sp = str(path).replace("\\", "/")
+        m = page_pattern.search(sp.lower())
+        if m:
+            classe, page = int(m.group(1)), int(m.group(2))
+            if classe in (7, 8, 9):
+                file_info.append({
+                    "classe": str(classe),
+                    "page": int(page),
+                    "path": path,
+                    "is_page_specific": True,
+                })
+        else:
+            # Alles, was NICHT dem Muster entspricht, ignorieren wir in dieser Version.
+            pass
+
+    if not file_info:
+        return pd.DataFrame(columns=["classe", "page", "path", "is_page_specific"])
+
+    df = pd.DataFrame(file_info).sort_values(["classe", "page"]).reset_index(drop=True)
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_and_preprocess_df(path: Path) -> pd.DataFrame:
+    """
+    Lädt eine CSV und normalisiert die Spalten auf: classe, page, de, en.
+    """
+    try:
+        df = pd.read_csv(path, sep=None, engine="python")
+    except Exception as e:
+        st.warning(f"CSV-Fehler {path.name}: {e}")
+        return pd.DataFrame()
+
+    # Spalten auf Standardnamen abbilden
+    col_map = {}
+    for c in df.columns:
+        lc = str(c).strip().lower()
+        if lc in {"klasse", "class", "classe"}:
+            col_map[c] = "classe"
+        elif lc in {"seite", "page", "pg"}:
+            col_map[c] = "page"
+        elif lc in {"de", "german", "deutsch", "wort", "vokabel", "vokabel_de"}:
+            col_map[c] = "de"
+        elif lc in {"en", "englisch", "english", "translation", "vokabel_en"}:
+            col_map[c] = "en"
+
+    df = df.rename(columns=col_map)
+    for req in ["classe", "page", "de", "en"]:
+        if req not in df.columns:
+            df[req] = None
+
+    df = df[["classe", "page", "de", "en"]].copy()
+    df["de"] = df["de"].astype(str).str.strip()
+    df["en"] = df["en"].astype(str).str.strip()
+    df = df.dropna(how="all", subset=["de", "en"])
+    return df
+
+
+# ============================ Spiele-UI ============================
+
+def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
+    key = f"hangman_{classe}_{page}_{seed_val}"
+    state = st.session_state.get(key)
+    rnd = random.Random(seed_val if seed_val else None)
+
+    if state is None:
+        if not df_view.empty:
+            row = rnd.choice(df_view.to_dict("records"))
+            state = {"solution": row["en"], "hint": row["de"], "guessed": set(), "fails": 0}
+            st.session_state[key] = state
+        else:
+            st.warning("Keine Vokabeln verfügbar.")
+            return
+
+    solution, hint = state["solution"], state["hint"]
+    guessed, fails = state["guessed"], state["fails"]
+
+    st.write(f"**Hinweis (DE):** {hint}")
+    st.text(HANGMAN_PICS[min(fails, len(HANGMAN_PICS)-1)])
+    display_word = " ".join([c if (not c.isalpha() or c.lower() in guessed) else "_" for c in solution])
+    st.write("**Wort (EN):** " + display_word)
+
+    with st.form(key=f"full_form_{key}"):
+        full_guess = st.text_input("Gesamtes Wort (engl.) eingeben", key=f"full_guess_{key}")
+        submitted = st.form_submit_button("Prüfen")
+        if submitted:
+            if normalize_text(full_guess) == normalize_text(solution):
+                st.success("Richtig!")
+                st.session_state.pop(key, None)
+                st.rerun()
+            else:
+                st.warning("Leider falsch.")
+
+    alphabet = list("abcdefghijklmnopqrstuvwxyz")
+    rows = [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]
+    for r in rows:
+        cols = st.columns(len(r))
+        for letter, col in zip(r, cols):
+            with col:
+                if st.button(letter, key=f"{key}_btn_{letter}", disabled=(letter in guessed)):
+                    if letter in normalize_text(solution):
+                        guessed.add(letter)
+                    else:
+                        fails += 1
+                    state["guessed"], state["fails"] = guessed, fails
+                    st.session_state[key] = state
+                    st.rerun()
+
+
+def game_drag_pairs(df_view: pd.DataFrame):
+    """Einfaches Drag&Drop-Paare-Spiel (DE ↔ EN) per HTML/JS."""
+    pairs = [(r["de"], r["en"]) for _, r in df_view.iterrows() if isinstance(r["de"], str) and isinstance(r["en"], str)]
+    st.write("Ziehe passende Karten zusammen (DE ↔ EN).")
+
     pairs_json = json.dumps(pairs, ensure_ascii=False)
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -104,32 +230,33 @@ body {{ font-family:Arial, sans-serif; margin:0; padding:10px; background:#f6f7f
 .card {{
   background:white; border:2px solid var(--primary); border-radius:10px;
   padding:10px; margin:5px; cursor:grab; user-select:none; min-width:120px;
-  text-align:center; box-shadow:0 2px 6px rgba(0,0,0,.06);
 }}
-.card.correct {{ background:var(--success); border-color:var(--success); color:white; cursor:default; }}
-#gameContainer {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:10px; margin-top:10px; }}
-#timer {{ font-size:1em; color:var(--primary); margin-bottom:10px; }}
-button {{
-  padding:6px 12px; margin-top:10px; border:2px solid var(--primary); border-radius:6px;
-  background:var(--primary); color:white; cursor:pointer;
-}}
-</style></head>
+.grid {{ display:flex; flex-wrap:wrap; gap:8px; }}
+.correct {{ background:#e8f5e9; border-color:var(--success); }}
+</style>
+</head>
 <body>
-  <div id="timer">⏱️ Zeit: <span id="timeValue">0</span> Sekunden</div>
-  <div id="gameContainer"></div>
-  <button onclick="restartGame()">🔄 Neustart</button>
+<div id="box" class="grid"></div>
 <script>
 const pairs = {pairs_json};
-let time=0, timerId=null, draggedCard=null;
-let words = pairs.map(p => ({{en:p.en, de:p.de}}));
-function shuffle(a){{for(let i=a.length-1;i>0;i--){{const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}}}}
-function isPair(a,b){{return words.some(w => (w.en===a && w.de===b) || (w.en===b && w.de===a));}}
-function checkWin(){{if(document.querySelectorAll('.card:not(.correct)').length===0){{clearInterval(timerId);alert(`🏆 Gewonnen! Zeit: ${{time}} Sekunden`);}}}}
-function startGame(){{
-  const box=document.getElementById('gameContainer'); box.innerHTML='';
-  clearInterval(timerId); time=0; document.getElementById('timeValue').textContent=time;
-  timerId=setInterval(()=>{{time++;document.getElementById('timeValue').textContent=time;}},1000);
-  const all=words.flatMap(w=>[w.en,w.de]); shuffle(all);
+let all = [];
+for (const [de,en] of pairs) {{
+  all.push(de); all.push(en);
+}}
+all = all.sort(() => Math.random() - 0.5);
+
+const box = document.getElementById('box');
+let draggedCard = null;
+
+function isPair(a, b) {{
+  for (const [de,en] of pairs) {{
+    if ((a === de && b === en) || (a === en && b === de)) return true;
+  }}
+  return false;
+}}
+
+function startGame() {{
+  box.innerHTML = '';
   for(const w of all){{
     const c=document.createElement('div'); c.className='card'; c.textContent=w; c.draggable=true;
     c.addEventListener('dragstart',e=>{{draggedCard=e.target; e.target.style.opacity='0.5';}});
@@ -137,324 +264,155 @@ function startGame(){{
     c.addEventListener('drop',e=>{{
       e.preventDefault(); if(!draggedCard||draggedCard===e.target) return;
       const a=draggedCard.textContent.trim(), b=e.target.textContent.trim();
-      if(isPair(a,b)){{ c.classList.add('correct'); e.target.classList.add('correct'); draggedCard.draggable=false; e.target.draggable=false; draggedCard=null; checkWin(); }}
-      else{{ alert('❌ Kein gültiges Paar!'); draggedCard.style.opacity='1'; draggedCard=null; }}
+      if(isPair(a,b)){{ e.target.classList.add('correct'); draggedCard.classList.add('correct'); draggedCard.draggable=false; e.target.draggable=false; draggedCard=null; }}
+      else{{ alert('Kein gültiges Paar!'); draggedCard.style.opacity='1'; draggedCard=null; }}
     }});
     c.addEventListener('dragend',e=>e.target.style.opacity='1');
     box.appendChild(c);
   }}
 }}
-function restartGame(){{clearInterval(timerId);startGame();}}
 document.addEventListener('DOMContentLoaded',startGame);
-</script></body></html>"""
-    return html
+</script>
+</body>
+</html>"""
+    st.components.v1.html(html, height=520, scrolling=True)
 
-# ============================ Robust Vocab Loader ============================
-@st.cache_data(show_spinner=False)
-def get_vocab_file_info(data_dir: os.PathLike | str):
-    """
-    Scans the data directory and returns a DataFrame with file information.
-    This function does NOT load the full CSV data, only file metadata.
-    """
-    file_info = []
-    base = Path(data_dir)
-    page_pattern = re.compile(r"klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
 
-    for path in base.glob("**/*.csv"):
-        sp = str(path).replace("\\", "/")
-        is_page_specific = "/data/pages/" in sp.lower()
-        
-        classe, page = None, None
-        m = page_pattern.search(sp.lower())
-        if m:
-            classe, page = int(m.group(1)), int(m.group(2))
-        else:
-            try:
-                # Fallback for general CSVs to extract class and page from content
-                df_temp = pd.read_csv(path, nrows=1, sep=None, engine="python")
-                col_names = [str(c).strip().lower() for c in df_temp.columns]
-                if 'classe' in col_names and 'page' in col_names:
-                    classe = int(df_temp[df_temp.columns[col_names.index('classe')]].iloc[0])
-                    page = int(df_temp[df_temp.columns[col_names.index('page')]].iloc[0])
-            except Exception:
-                continue
+def game_input(df_view: pd.DataFrame):
+    """Eingabespiel: Deutsch anzeigen, Englisch tippen."""
+    rows = df_view.to_dict("records")
+    random.shuffle(rows)
+    st_state = st.session_state.get("input_state")
+    if not st_state:
+        st_state = {"index": 0, "order": list(range(len(rows))), "score": 0, "total": 0}
+        st.session_state["input_state"] = st_state
 
-        if classe and page and classe in range(7, 10):
-            file_info.append({
-                'classe': str(classe),
-                'page': int(page),
-                'path': path,
-                'is_page_specific': is_page_specific
-            })
+    i = st_state["index"]
+    if i >= len(rows):
+        st.success(f"Fertig! Punkte: {st_state['score']} / {st_state['total']}")
+        return
 
-    return pd.DataFrame(file_info)
+    row = rows[st_state["order"][i]]
+    st.write(f"**Deutsch:** {row['de']}")
+    sol_key = "input_solution"
+    user = st.text_input("Englische Übersetzung:", key=f"user_{i}")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Prüfen"):
+            st_state["total"] += 1
+            if normalize_text(user) == normalize_text(row["en"]):
+                st_state["score"] += 1
+                st.success("Richtig!")
+            else:
+                st.warning("Leider falsch.")
+            st_state["index"] += 1
+            st.session_state["input_state"] = st_state
+            st.rerun()
+    with c2:
+        if st.button("Lösung anzeigen"):
+            st.session_state[sol_key] = row["en"]; st.rerun()
+    with c3:
+        if st.button("Serie beenden"):
+            st_state["index"] = len(st_state["order"]); st.session_state["input_state"] = st_state; st.rerun()
+    if sol_key in st.session_state:
+        st.info(f"Lösung: {st.session_state[sol_key]}")
 
-@st.cache_data(show_spinner=False)
-def load_and_preprocess_df(path: Path) -> pd.DataFrame:
-    """
-    Loads a single CSV file and normalizes its columns.
-    """
-    try:
-        df = pd.read_csv(path, sep=None, engine="python")
-    except Exception as e:
-        st.warning(f"CSV error {path.name}: {e}")
-        return pd.DataFrame()
 
-    col_map = {}
-    for c in df.columns:
-        lc = str(c).strip().lower()
-        if lc in {"klasse", "class", "classe"}:
-            col_map[c] = "classe"
-        elif lc in {"page", "seite"}:
-            col_map[c] = "page"
-        elif lc in {"de", "deutsch", "german"}:
-            col_map[c] = "de"
-        elif lc in {"en", "englisch", "english"}:
-            col_map[c] = "en"
-    df = df.rename(columns=col_map)
-    
-    sp = str(path).replace("\\", "/")
-    df["source_path"] = sp
-    df["source_is_page"] = "/data/pages/" in sp.lower()
+# ============================ Main ============================
 
-    if "classe" not in df.columns: df["classe"] = ""
-    if "page" not in df.columns: df["page"] = None
-    if "de" not in df.columns: df["de"] = ""
-    if "en" not in df.columns: df["en"] = ""
+def main():
+    st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
+    st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
 
-    df["classe"] = df["classe"].astype(str)
-    df["page"] = pd.to_numeric(df["page"], errors="coerce").astype("Int64")
-    df["de"] = df["de"].astype(str)
-    df["en"] = df["en"].astype(str)
-    df = df[(df["de"].str.strip() != "") & (df["en"].str.strip() != "")]
-    
-    page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
-    m = page_pattern.search(sp.lower())
-    if m:
-        k, pg = m.group(1), m.group(2)
-        df["classe"] = str(int(k))
-        df["page"] = int(pg)
-
-    return df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
-
-# ============================ Main Application ============================
-def main() -> None:
-    st.set_page_config(page_title="Wortschatz-Spiele (7–9)", page_icon="🎯", layout="centered")
-    st.title("🎯 Wortschatz-Spiele (Klassen 7–9)")
-    st.caption("Wähle Klasse & Seite. Spiele: Galgenmännchen, Wörter ziehen, Eingabe (DE→EN).")
-
-    c_reset, c_debug, _ = st.columns([1,1,6])
-    with c_reset:
-        if st.button("🔄 Cache leeren"):
+    # Kopfzeile
+    c_left, c_mid, c_debug = st.columns([2, 1, 1])
+    with c_left:
+        st.caption("Quelle: CSVs unter `/data/pages/klasseK/klasseK_pageS.csv`.")
+    with c_mid:
+        if st.button("Cache leeren"):
             st.cache_data.clear(); st.rerun()
     with c_debug:
         debug_on = st.toggle("Debug an/aus", value=False)
 
     DATA_DIR = Path(__file__).parent / "data"
-    try:
-        file_info_df = get_vocab_file_info(DATA_DIR)
-        file_info_df = file_info_df[file_info_df["classe"].isin({"7", "8", "9"})]
-    except FileNotFoundError as e:
-        st.error(f"Fehler: {e}")
-        return
-    
+
+    # CSV-Metadaten lesen (nur seiten-spezifisch)
+    file_info_df = get_vocab_file_info(DATA_DIR)
+    file_info_df = file_info_df[file_info_df["classe"].isin({"7", "8", "9"})]
+    file_info_df = file_info_df[file_info_df["is_page_specific"] == True]
+
     if file_info_df.empty:
-        st.warning("Keine Vokabeln für die Klassen 7–9 gefunden."); return
+        st.warning("Keine seiten-spezifischen CSVs für Klassen 7–9 gefunden.")
+        return
 
-    classes = sorted(file_info_df['classe'].unique(), key=lambda x: int(x))
-    classe = st.selectbox("Klasse", classes, format_func=lambda x: f"Klasse {x}")
-
-    pages = sorted(file_info_df[file_info_df['classe'] == classe]['page'].unique())
+    # Auswahl Klasse/Seite
+    classe = st.selectbox("Klasse", sorted(file_info_df["classe"].unique(), key=int), index=2)
+    pages = sorted(file_info_df[file_info_df["classe"] == classe]["page"].unique(), key=int)
     if not pages:
-        st.warning(f"Keine Seiten für Klasse {classe} gefunden."); return
-    
+        st.warning(f"Keine Seiten für Klasse {classe} gefunden.")
+        return
+
     page = st.selectbox("Seite", pages, index=0)
-    mode = st.radio("Umfang", ["Nur diese Seite", "Bis einschließlich dieser Seite"], horizontal=True)
 
-    # Load and filter based on user selection
-    if mode == "Nur diese Seite":
-        # Check for page-specific file first
-        page_specific_paths = file_info_df[
-            (file_info_df['classe'] == classe) &
-            (file_info_df['page'] == page) &
-            (file_info_df['is_page_specific'] == True)
-        ]['path']
+    # Seite laden (nur seiten-spezifische Datei; KEIN Fallback)
+    page_specific_paths = file_info_df[
+        (file_info_df['classe'] == classe) &
+        (file_info_df['page'] == page)
+    ]['path']
 
-        if not page_specific_paths.empty:
-            df_view = load_and_preprocess_df(page_specific_paths.iloc[0])
-            df_view = _filter_by_page_rows(df_view, int(classe), int(page), inclusive=False)
-            st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
-        else:
-            # Fallback to general files
-            general_paths = file_info_df[
-                (file_info_df['classe'] == classe) &
-                (file_info_df['page'] == page) &
-                (file_info_df['is_page_specific'] == False)
-            ]['path']
-            if not general_paths.empty:
-                df_view = pd.concat([load_and_preprocess_df(p) for p in general_paths], ignore_index=True)
-                df_view = _filter_by_page_rows(df_view, int(classe), int(page), inclusive=False)
-            else:
-                df_view = pd.DataFrame()
-            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
-    
-    else: # "Bis einschließlich dieser Seite"
-        relevant_paths = file_info_df[
-            (file_info_df['classe'] == classe) &
-            (file_info_df['page'] <= page)
-        ]['path']
-        if not relevant_paths.empty:
-            df_view = pd.concat([load_and_preprocess_df(p) for p in relevant_paths], ignore_index=True)
-            df_view = _filter_by_page_rows(df_view, int(classe), int(page), inclusive=True)
-        else:
-            df_view = pd.DataFrame()
-    
+    if page_specific_paths.empty:
+        st.info("Für diese Seite existiert keine seiten-spezifische CSV unter data/pages/klasseX/klasseX_pageY.csv.")
+        return
+
+    df_view = load_and_preprocess_df(page_specific_paths.iloc[0])
+    df_view = _filter_by_page_rows(df_view, int(classe), int(page))
+
     if df_view.empty:
-        st.info("Keine Vokabeln für diese Auswahl."); return
+        st.info("Keine Vokabeln für diese Seite.")
+        return
 
-    st.write(f"**Vokabeln verfügbar**: {len(df_view)}")
-    
+    st.write(f"**Vokabeln verfügbar:** {len(df_view)}")
+
+    # Debug
     if debug_on:
-        with st.expander("🔍 Debug: Quellenübersicht"):
-            st.write(f"Auswahl: Klasse {classe}, Seite {int(page)}, Modus: {mode}")
-            if "source_path" in df_view.columns:
-                st.table(df_view["source_path"].value_counts().head(12))
-            st.dataframe(df_view.head(30))
+        with st.expander("Debug-Info"):
+            st.write("Datei-Info (erste 50):", file_info_df.head(50))
+            st.write("Beispiel-Daten (erste 20):", df_view.head(20))
+            st.write("Seitenverteilung:", df_view["page"].value_counts().head(10))
 
+    # Filter: Nur Einzelwörter
     st.subheader("Filter: Nur Einzelwörter")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1: filter_simple = st.checkbox("Nur Einzelwörter aktivieren", value=False)
-    with col2: ignore_articles = st.checkbox("Artikel/‘to ’ ignorieren", value=True)
-    with col3: ignore_abbrev = st.checkbox("Abkürzungen ausschließen", value=True)
-    with col4: min_length = st.number_input("Min. Wortlänge", 1, 10, 2, 1, format="%d")
+    col1, col2, col3 = st.columns([1.5, 1, 1])
+    with col1:
+        filter_simple = st.checkbox("Nur Einzelwörter aktivieren", value=False)
+    with col2:
+        ignore_articles = st.checkbox("Artikel (to/the/a/an) ignorieren", value=True)
+    with col3:
+        ignore_abbrev = st.checkbox("Abkürzungen (z. B. sth/sb) ignorieren", value=True)
+    min_length = st.slider("Minimale Wortlänge", 1, 6, 2, 1)
 
     if filter_simple:
         mask = df_view["en"].apply(lambda x: is_simple_word(
             x, ignore_articles=ignore_articles, ignore_abbrev=ignore_abbrev, min_length=min_length
         ))
         df_view = df_view[mask].reset_index(drop=True)
-        st.write(f"**Vokabeln nach Filter**: {len(df_view)}")
+        st.write(f"**Vokabeln nach Filter:** {len(df_view)}")
         if df_view.empty:
-            st.info("Der Filter entfernt alle Vokabeln. Passe die Einstellungen an."); return
+            st.info("Der Filter entfernt alle Vokabeln. Passe die Einstellungen an.")
+            return
 
     seed_val = st.text_input("Seed (optional – gleiche Reihenfolge für alle)", value="")
-    rnd = random.Random(seed_val if seed_val else None)
-
     game = st.selectbox("Wähle ein Spiel", ("Galgenmännchen", "Wörter ziehen", "Eingabe (DE → EN)"))
 
     if game == "Galgenmännchen":
-        key = f"hangman_{classe}_{page}_{mode}_{filter_simple}_{seed_val}"
-        state = st.session_state.get(key)
-        if state is None:
-            if not df_view.empty:
-                row = rnd.choice(df_view.to_dict("records"))
-                state = {"solution": row["en"], "hint": row["de"], "guessed": set(), "fails": 0}
-                st.session_state[key] = state
-            else:
-                st.warning("No vocab available for this game.")
-                return
-
-        solution, hint = state["solution"], state["hint"]
-        guessed, fails = state["guessed"], state["fails"]
-
-        st.write(f"**Hinweis (DE)**: {hint}")
-        st.text(HANGMAN_PICS[min(fails, len(HANGMAN_PICS)-1)])
-        display_word = " ".join([c if (not c.isalpha() or c.lower() in guessed) else "_" for c in solution])
-        st.write("**Wort (EN):** " + display_word)
-
-        with st.form(key=f"full_form_{key}"):
-            full_guess = st.text_input("Gesamtes Wort (engl.) eingeben", key=f"full_guess_{key}")
-            if st.form_submit_button("Wort prüfen (komplett)"):
-                g = normalize_text(full_guess)
-                if g and answers_equal(g, solution):
-                    guessed.update(c for c in normalize_text(solution) if c.isalpha()); st.success("✔ Korrekt!")
-                else:
-                    fails += 1
-                state["guessed"], state["fails"] = guessed, fails
-                st.session_state[key] = state; st.rerun()
-
-        alphabet = list("abcdefghijklmnopqrstuvwxyz")
-        rows = [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]
-        for r in rows:
-            cols = st.columns(len(r))
-            for letter, col in zip(r, cols):
-                with col:
-                    if st.button(letter, key=f"{key}_btn_{letter}", disabled=(letter in guessed)):
-                        if letter in normalize_text(solution): guessed.add(letter)
-                        else: fails += 1
-                        state["guessed"], state["fails"] = guessed, fails
-                        st.session_state[key] = state; st.rerun()
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Neue Karte"): st.session_state.pop(key, None); st.rerun()
-        with c2:
-            if st.button("Lösung anzeigen"):
-                guessed.update(c for c in normalize_text(solution) if c.isalpha())
-                state["guessed"], state["fails"] = guessed, min(fails, 8)
-                st.session_state[key] = state; st.rerun()
-        with c3: st.write(f"Fehler: {fails} / 8")
-
-        if all((not c.isalpha()) or (c.lower() in guessed) for c in solution):
-            st.success(f"🎉 Richtig! Das Wort war: {solution}")
-        elif fails >= 8:
-            st.error(f"🚫 Leider verloren. Das Wort war: {solution}")
-
+        game_hangman(df_view, classe, page, seed_val)
     elif game == "Wörter ziehen":
-        if df_view.empty: st.info("Nicht genügend Daten."); return
-        sample = df_view.sample(n=min(len(df_view), 8), random_state=rnd.randint(0, 10**9))
-        pairs = [{"en": row["en"], "de": row["de"]} for _, row in sample.iterrows()]
-        components.v1.html(_render_word_drag(pairs), height=620, scrolling=True)
-
+        game_drag_pairs(df_view)
     else:
-        key = f"input_{classe}_{page}_{mode}_{filter_simple}_{seed_val}"
-        st_state = st.session_state.get(key)
-        max_q = 10
-        if not st_state:
-            order = list(df_view.index); rnd.shuffle(order); order = order[: min(max_q, len(order))]
-            st_state = {"order": order, "index": 0, "score": 0, "total": 0, "results": []}
-            st.session_state[key] = st_state
-
-        if st_state["index"] >= len(st_state["order"]):
-            st.success(f"Serie beendet! {st_state['score']} von {st_state['total']} richtig.")
-            if st.session_state[key]["results"]:
-                t = pd.DataFrame(st_state["results"]); t.index += 1
-                st.table(t.rename(columns={"de":"Deutsch","answer":"Deine Antwort","en":"Richtig","correct":"Korrekt"}))
-            if st.button("Neue Serie"): st.session_state.pop(key, None); st.rerun()
-        else:
-            idx = st_state["order"][st_state["index"]]
-            row = df_view.loc[idx]
-            if st_state["results"]:
-                t = pd.DataFrame(st_state["results"]).assign(Bewertung=lambda d: d["correct"].apply(lambda c: "✅" if c else "❌"))
-                t.index += 1; st.table(t.rename(columns={"de":"Deutsch","answer":"Deine Antwort","en":"Richtig"})[["Deutsch","Deine Antwort","Richtig","Bewertung"]])
-            st.write(f"**Deutsch:** {row['de']}")
-            sol_key = f"show_solution_{key}"
-            if sol_key in st.session_state:
-                st.info(f"✔ Lösung: {st.session_state[sol_key]}")
-                if st.button("Weiter"):
-                    st_state["results"].append({"de": row["de"], "en": row["en"], "answer": "(angezeigt)", "correct": False})
-                    st_state["total"] += 1; st_state["index"] += 1
-                    del st.session_state[sol_key]; st.session_state[key] = st_state; st.rerun()
-            else:
-                with st.form(key=f"input_form_{key}"):
-                    ans = st.text_input("Englisches Wort eingeben", key=f"ans_{key}")
-                    if st.form_submit_button("Prüfen"):
-                        ok = answers_equal(ans, row["en"])
-                        if ok: st.success("✔ Korrekt!"); st_state["score"] += 1
-                        else: st.error(f"✘ Falsch — Richtig ist: {row['en']}")
-                        st_state["results"].append({"de": row["de"], "en": row["en"], "answer": ans, "correct": ok})
-                        st_state["total"] += 1; st_state["index"] += 1
-                        st.session_state[key] = st_state; st.rerun()
-                c2, c3 = st.columns(2)
-                with c2:
-                    if st.button("Lösung anzeigen"):
-                        st.session_state[sol_key] = row["en"]; st.rerun()
-                with c3:
-                    if st.button("Serie beenden"):
-                        st_state["index"] = len(st_state["order"]); st.session_state[key] = st_state; st.rerun()
-                st.write(f"Frage {st_state['index'] + 1} / {len(st_state['order'])} – Punkte: {st_state['score']} / {st_state['total']}")
+        game_input(df_view)
 
     st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Insgesamt geladene Vokabeln: {len(df_view)}")
+
 
 if __name__ == "__main__":
     main()
