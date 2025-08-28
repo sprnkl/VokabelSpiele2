@@ -217,6 +217,7 @@ def main() -> None:
 
     # Corrected filtering logic
     if mode == "Nur diese Seite":
+        # First, filter for pages-specific files
         df_pages_specific = all_files_df[
             (all_files_df["classe"] == classe) & 
             (all_files_df["page"] == page) & 
@@ -227,6 +228,7 @@ def main() -> None:
             df_view = df_pages_specific
             st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
         else:
+            # If no pages-specific file, fall back to all files for the page
             df_view = all_files_df[(all_files_df["classe"] == classe) & (all_files_df["page"] == page)]
             st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
     else:
