@@ -128,52 +128,82 @@ document.addEventListener('DOMContentLoaded',startGame);
 
 # ============================ Robust Vocab Loader ============================
 @st.cache_data(show_spinner=False)
-def load_and_preprocess_df(path: Path) -> pd.DataFrame:
+def get_all_vocab_file_info(data_dir: os.PathLike | str):
     """
-    Loads a single CSV file, normalizes its columns, and adds path info.
+    Scans data directory and returns a dictionary with class and page info.
+    Does not load the full dataframes to keep the app fast.
     """
-    try:
-        df = pd.read_csv(path, sep=None, engine="python")
-    except Exception as e:
-        st.warning(f"CSV error {path.name}: {e}")
-        return pd.DataFrame()
-
-    col_map = {}
-    for c in df.columns:
-        lc = str(c).strip().lower()
-        if lc in {"klasse", "class", "classe"}:
-            col_map[c] = "classe"
-        elif lc in {"page", "seite"}:
-            col_map[c] = "page"
-        elif lc in {"de", "deutsch", "german"}:
-            col_map[c] = "de"
-        elif lc in {"en", "englisch", "english"}:
-            col_map[c] = "en"
-    df = df.rename(columns=col_map)
-    
-    sp = str(path).replace("\\", "/")
-    df["source_path"] = sp
-    df["source_is_page"] = "/data/pages/" in sp.lower()
-
-    if "classe" not in df.columns: df["classe"] = ""
-    if "page" not in df.columns: df["page"] = None
-    if "de" not in df.columns: df["de"] = ""
-    if "en" not in df.columns: df["en"] = ""
-
-    df["classe"] = df["classe"].astype(str)
-    df["page"] = pd.to_numeric(df["page"], errors="coerce").astype("Int64")
-    df["de"] = df["de"].astype(str)
-    df["en"] = df["en"].astype(str)
-    df = df[(df["de"].str.strip() != "") & (df["en"].str.strip() != "")]
-    
+    file_info = []
+    base = Path(data_dir)
     page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
-    m = page_pattern.search(sp.lower())
-    if m:
-        k, pg = m.group(1), m.group(2)
-        df["classe"] = str(int(k))
-        df["page"] = int(pg)
 
-    return df.drop_duplicates(subset=["classe", "page", "de", "en"]).reset_index(drop=True)
+    for path in base.glob("**/*.csv"):
+        sp = str(path).replace("\\", "/")
+        is_page_specific = "/data/pages/" in sp.lower()
+        
+        classe, page = None, None
+        m = page_pattern.search(sp.lower())
+        if m:
+            classe, page = int(m.group(1)), int(m.group(2))
+        else:
+            try:
+                # Fallback for general CSVs that might have 'classe' and 'page' columns
+                df_temp = pd.read_csv(path, nrows=1, sep=None, engine="python")
+                col_names = [str(c).strip().lower() for c in df_temp.columns]
+                if 'classe' in col_names and 'page' in col_names:
+                    classe = int(df_temp[df_temp.columns[col_names.index('classe')]].iloc[0])
+                    page = int(df_temp[df_temp.columns[col_names.index('page')]].iloc[0])
+            except Exception:
+                continue
+
+        if classe and page and classe in range(7, 10):
+            file_info.append({
+                'classe': str(classe),
+                'page': page,
+                'path': path,
+                'is_page_specific': is_page_specific
+            })
+
+    return pd.DataFrame(file_info)
+
+@st.cache_data(show_spinner=False)
+def load_vocab_for_selection(classe, page, mode, file_info_df):
+    """
+    Loads only the necessary CSV files based on user selection.
+    """
+    target_class = str(classe)
+    target_page = int(page)
+
+    if mode == "Nur diese Seite":
+        # Check for page-specific file first
+        page_specific_files = file_info_df[
+            (file_info_df['classe'] == target_class) &
+            (file_info_df['page'] == target_page) &
+            (file_info_df['is_page_specific'] == True)
+        ]
+
+        if not page_specific_files.empty:
+            path = page_specific_files.iloc[0]['path']
+            return load_and_preprocess_df(path)
+        else:
+            # Fallback to general files
+            general_files = file_info_df[
+                (file_info_df['classe'] == target_class) &
+                (file_info_df['page'] == target_page) &
+                (file_info_df['is_page_specific'] == False)
+            ]
+            if not general_files.empty:
+                return pd.concat([load_and_preprocess_df(p) for p in general_files['path']], ignore_index=True)
+    
+    else: # "Bis einschließlich dieser Seite"
+        relevant_files = file_info_df[
+            (file_info_df['classe'] == target_class) &
+            (file_info_df['page'] <= target_page)
+        ]
+        if not relevant_files.empty:
+            return pd.concat([load_and_preprocess_df(p) for p in relevant_files['path']], ignore_index=True)
+
+    return pd.DataFrame()
 
 # ============================ Main Application ============================
 def main() -> None:
@@ -189,51 +219,28 @@ def main() -> None:
         debug_on = st.toggle("Debug an/aus", value=False)
 
     DATA_DIR = Path(__file__).parent / "data"
-    all_files_df = pd.DataFrame()
     try:
-        all_file_paths = [p for p in DATA_DIR.glob("**/*.csv")]
-        if not all_file_paths:
-            raise FileNotFoundError(f"No CSV files found in {DATA_DIR.resolve()}.")
-
-        all_files_df = pd.concat([load_and_preprocess_df(p) for p in all_file_paths], ignore_index=True)
-        all_files_df = all_files_df[all_files_df["classe"].isin({"7", "8", "9"})]
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
+        file_info_df = get_all_vocab_file_info(DATA_DIR)
+        file_info_df = file_info_df[file_info_df["classe"].isin({"7", "8", "9"})]
+    except FileNotFoundError as e:
+        st.error(f"Fehler: {e}")
         return
-
-    if all_files_df.empty:
-        st.warning("No vocabulary found for classes 7-9."); return
-
-    classes = sorted(all_files_df["classe"].unique(), key=lambda x: int(x))
-    classe = st.selectbox("Klasse", classes, format_func=lambda x: f"Klasse {x}")
     
-    df_class = all_files_df[all_files_df["classe"] == classe]
-    pages = sorted(df_class["page"].dropna().unique())
-    if not pages:
-        st.warning(f"No pages found for class {classe}."); return
+    if file_info_df.empty:
+        st.warning("Keine Vokabeln für die Klassen 7–9 gefunden."); return
 
+    classes = sorted(file_info_df['classe'].unique(), key=lambda x: int(x))
+    classe = st.selectbox("Klasse", classes, format_func=lambda x: f"Klasse {x}")
+
+    pages = sorted(file_info_df[file_info_df['classe'] == classe]['page'].unique())
+    if not pages:
+        st.warning(f"Keine Seiten für Klasse {classe} gefunden."); return
+    
     page = st.selectbox("Seite", pages, index=0)
     mode = st.radio("Umfang", ["Nur diese Seite", "Bis einschließlich dieser Seite"], horizontal=True)
 
-    # Corrected filtering logic
-    if mode == "Nur diese Seite":
-        # First, filter for pages-specific files
-        df_pages_specific = all_files_df[
-            (all_files_df["classe"] == classe) &
-            (all_files_df["page"] == page) &
-            (all_files_df["source_is_page"] == True)
-        ]
-
-        if not df_pages_specific.empty:
-            df_view = df_pages_specific
-            st.caption("Quelle: **data/pages/** (classe/page aus Dateinamen erzwungen).")
-        else:
-            # If no pages-specific file, fall back to all files for the page
-            df_view = all_files_df[(all_files_df["classe"] == classe) & (all_files_df["page"] == page)]
-            st.caption("Keine spezifische Quelldatei gefunden, verwende alle passenden Einträge.")
-    else:
-        df_view = all_files_df[(all_files_df["classe"] == classe) & (all_files_df["page"] <= page)]
-
+    df_view = load_vocab_for_selection(classe, page, mode, file_info_df)
+    
     st.write(f"**Vokabeln verfügbar**: {len(df_view)}")
     if df_view.empty:
         st.info("Keine Vokabeln für diese Auswahl."); return
