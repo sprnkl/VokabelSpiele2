@@ -98,30 +98,30 @@ button {{
 <script>
 const pairs = {pairs_json};
 let time=0, timerId=null, draggedCard=null;
-let words = pairs.map(p => ({{{{en:p.en, de:p.de}}}}));
-function shuffle(a){{{{for(let i=a.length-1;i>0;i--){{{{const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}}}}}}}
-function isPair(a,b){{{{return words.some(w => (w.en===a && w.de===b) || (w.en===b && w.de===a));}}}}
-function checkWin(){{{{if(document.querySelectorAll('.card:not(.correct)').length===0){{{{clearInterval(timerId);alert(`🏆 Gewonnen! Zeit: ${{{{time}}}} Sekunden`);}}}}}}}}
-function startGame(){{{{
+let words = pairs.map(p => ({{en:p.en, de:p.de}}));
+function shuffle(a){{for(let i=a.length-1;i>0;i--){{const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}}}}
+function isPair(a,b){{return words.some(w => (w.en===a && w.de===b) || (w.en===b && w.de===a));}}
+function checkWin(){{if(document.querySelectorAll('.card:not(.correct)').length===0){{clearInterval(timerId);alert(`🏆 Gewonnen! Zeit: ${{time}} Sekunden`);}}}}
+function startGame(){{
   const box=document.getElementById('gameContainer'); box.innerHTML='';
   clearInterval(timerId); time=0; document.getElementById('timeValue').textContent=time;
-  timerId=setInterval(()=>{{{{time++;document.getElementById('timeValue').textContent=time;}}}},1000);
+  timerId=setInterval(()=>{{time++;document.getElementById('timeValue').textContent=time;}},1000);
   const all=words.flatMap(w=>[w.en,w.de]); shuffle(all);
-  for(const w of all){{{{
+  for(const w of all){{
     const c=document.createElement('div'); c.className='card'; c.textContent=w; c.draggable=true;
-    c.addEventListener('dragstart',e=>{{{{draggedCard=e.target; e.target.style.opacity='0.5';}}}});
+    c.addEventListener('dragstart',e=>{{draggedCard=e.target; e.target.style.opacity='0.5';}});
     c.addEventListener('dragover',e=>e.preventDefault());
-    c.addEventListener('drop',e=>{{{{
+    c.addEventListener('drop',e=>{{
       e.preventDefault(); if(!draggedCard||draggedCard===e.target) return;
       const a=draggedCard.textContent.trim(), b=e.target.textContent.trim();
-      if(isPair(a,b)){{{{ c.classList.add('correct'); e.target.classList.add('correct'); draggedCard.draggable=false; e.target.draggable=false; draggedCard=null; checkWin(); }}}}
-      else{{{{ alert('❌ Kein gültiges Paar!'); draggedCard.style.opacity='1'; draggedCard=null; }}}}
-    }}}});
+      if(isPair(a,b)){{ c.classList.add('correct'); e.target.classList.add('correct'); draggedCard.draggable=false; e.target.draggable=false; draggedCard=null; checkWin(); }}
+      else{{ alert('❌ Kein gültiges Paar!'); draggedCard.style.opacity='1'; draggedCard=null; }}
+    }});
     c.addEventListener('dragend',e=>e.target.style.opacity='1');
     box.appendChild(c);
-  }}}}
+  }}
 }}
-function restartGame(){{{{clearInterval(timerId);startGame();}}}}
+function restartGame(){{clearInterval(timerId);startGame();}}
 document.addEventListener('DOMContentLoaded',startGame);
 </script></body></html>"""
     return html
