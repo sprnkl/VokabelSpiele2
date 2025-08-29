@@ -8,7 +8,8 @@ Spiele/Features:
 - Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
   Next word (Sequenz) & New word (Skip).
 - Wörtermemory (vormals „Wörter ziehen“): Standard = Click/Tap-to-Match (alle Plattformen),
-  optional Desktop-Drag-Modus zuschaltbar; Timer; „Show solution“ als Tabelle (DE — EN).
+  optional Desktop-Drag-Modus zuschaltbar; Timer; „Show solution“ als Tabelle (DE — EN);
+  **neue Option: Anzahl der Paare (ganze Seite ODER konkrete Anzahl)**; Subset bleibt stabil.
 - Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution (DE — EN),
   Next word (Skip), stabiler Items-Index (kein Vertauschen).
 """
@@ -335,26 +336,81 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
 
 # ---------- Wörtermemory (Click/Tap-to-Match; optional Drag) ----------
 
-def game_word_memory(df_view: pd.DataFrame, show_solution_table: bool):
+def _hash_items(items):
+    m = hashlib.sha256()
+    for it in items:
+        m.update((str(it.get("de","")) + "||" + str(it.get("en",""))).encode("utf-8"))
+    return m.hexdigest()
+
+def _sample_subset(items, mode, k, seed_val, state_key):
+    """
+    items: Liste von {de,en}
+    mode: 'all' oder 'k'
+    k: gewünschte Anzahl (nur bei mode 'k')
+    seed_val: Seed-String oder ''
+    state_key: key für st.session_state (Subset stabil halten)
+    """
+    base_hash = _hash_items(items)
+    st_state = st.session_state.get(state_key)
+
+    # Soll neu gesampelt werden?
+    need_new = (
+        st_state is None or
+        st_state.get("base_hash") != base_hash or
+        st_state.get("mode") != mode or
+        (mode == "k" and st_state.get("k") != k)
+    )
+
+    if not need_new:
+        return st_state["subset"]
+
+    if mode == "all" or k >= len(items):
+        subset = list(items)
+    else:
+        order = list(range(len(items)))
+        rnd = random.Random(seed_val) if seed_val else random.Random()
+        rnd.shuffle(order)
+        subset = [items[i] for i in order[:max(1, int(k))]]
+
+    st.session_state[state_key] = {
+        "base_hash": base_hash,
+        "mode": mode,
+        "k": int(k),
+        "subset": subset,
+    }
+    return subset
+
+
+def game_word_memory(df_view: pd.DataFrame, classe: str, page: int,
+                     show_solution_table: bool, subset_mode: str, subset_k: int, seed_val: str):
     """
     Standard = Click/Tap-to-Match (alle Plattformen).
     Optional: Drag-Modus auf Desktop zuschaltbar.
+    Subset: ganze Seite oder k-Paare (stabil pro Auswahl).
     """
-    pairs = [
-        {"id": i, "de": r["de"], "en": r["en"]}
-        for i, r in enumerate(df_view.to_dict("records"))
+    base_items = [
+        {"de": r["de"], "en": r["en"]}
+        for r in df_view.to_dict("records")
         if isinstance(r["de"], str) and isinstance(r["en"], str)
     ]
-    if not pairs:
+    if not base_items:
         st.info("No vocabulary.")
         return
 
-    st.write("Klicke zwei Karten, die zusammengehören (DE ↔ EN). Optional: Drag-Modus auf Desktop.")
+    subset_state_key = f"memory_subset_{classe}_{page}"
+    items = _sample_subset(base_items, subset_mode, subset_k, seed_val, subset_state_key)
+
+    st.write(f"Pairs in this round: **{len(items)}**")
+    st.caption("Klicke zwei Karten, die zusammengehören (DE ↔ EN). Optional: Drag-Modus auf Desktop.")
+
     if show_solution_table:
         st.subheader("Solution (DE — EN)")
-        st.dataframe(pd.DataFrame(pairs)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}), use_container_width=True)
+        st.dataframe(pd.DataFrame(items)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}), use_container_width=True)
 
-    pairs_json = json.dumps(pairs, ensure_ascii=False)
+    pairs_json = json.dumps(
+        [{"id": i, "de": it["de"], "en": it["en"]} for i, it in enumerate(items)],
+        ensure_ascii=False
+    )
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -414,12 +470,12 @@ const pairs = {pairs_json};
 // Desktop-DnD verfügbar?
 const nativeDnD = ('ondragstart' in document.createElement('div'));
 
-// Standard: immer Tap/Click (benutzerfreundlich überall)
+// Standard: Tap/Click
 let TAP_MODE = true;
 
 let running = false, timerId = null, startTime = null, elapsed = 0; // ms
 let correctPairs = 0, solved = false;
-let draggedCard = null;       // für DnD
+let draggedCard = null;       // für optionales DnD
 let selectedCard = null;      // für Tap
 
 function fmt(ms) {{
@@ -622,12 +678,6 @@ layoutShuffled();
 
 # ---------- Eingabe (DE → EN) ----------
 
-def _hash_items(items):
-    m = hashlib.sha256()
-    for it in items:
-        m.update((str(it.get("de","")) + "||" + str(it.get("en",""))).encode("utf-8"))
-    return m.hexdigest()
-
 def game_input(df_view: pd.DataFrame, classe: str, page: int):
     """
     Eingabespiel (DE→EN):
@@ -729,7 +779,7 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
 
 def main():
     st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
-    st.title("Wortschatz-Spiele (Klassen 7–9) – Grundkurs")
+    st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
 
     c_left, c_mid, c_debug = st.columns([2, 1, 1])
     with c_left:
@@ -774,7 +824,7 @@ def main():
         st.info("Keine Vokabeln für diese Seite.")
         return
 
-    st.write(f"**Vokabeln verfügbar:** {len(df_view)}")
+    st.write(f"**Vokabeln verfügbar (Seite):** {len(df_view)}")
 
     if debug_on:
         with st.expander("Debug-Info"):
@@ -802,18 +852,35 @@ def main():
             st.info("Der Filter entfernt alle Vokabeln. Passe die Einstellungen an.")
             return
 
-    seed_val = st.text_input("Seed (optional – gleiche Reihenfolge für alle)", value="")
+    seed_val = st.text_input("Seed (optional – gleiche Reihenfolge/Subsets)", value="")
     game = st.selectbox("Wähle ein Spiel", ("Hangman", "Wörtermemory", "Eingabe (DE → EN)"))
 
     if game == "Hangman":
         game_hangman(df_view, classe, page, seed_val)
+
     elif game == "Wörtermemory":
-        show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
-        game_word_memory(df_view, show_solution_table=show_solution_table)
+        # Anzahl-Picker: ganze Seite oder k-Paare
+        max_pairs = len(df_view)
+        cA, cB, cC = st.columns([1, 1, 1.5])
+        with cA:
+            subset_all = st.checkbox("Ganze Seite abfragen", value=True)
+        with cB:
+            if subset_all:
+                subset_k = max_pairs
+                st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=max_pairs, step=1, disabled=True)
+            else:
+                default_k = min(10, max_pairs) if max_pairs >= 2 else max_pairs
+                subset_k = st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=default_k, step=1)
+        with cC:
+            show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
+
+        subset_mode = "all" if subset_all else "k"
+        game_word_memory(df_view, classe, page, show_solution_table, subset_mode, int(subset_k), seed_val)
+
     else:
         game_input(df_view, classe, page)
 
-    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Insgesamt geladene Vokabeln: {len(df_view)}")
+    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Geladene Vokabeln (aktiv): {len(df_view)}")
 
 
 if __name__ == "__main__":
