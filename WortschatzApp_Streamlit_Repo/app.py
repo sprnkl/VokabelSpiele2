@@ -12,8 +12,7 @@ Spiele/Features:
 - Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
   Next word (Sequenz) & New word (Skip).
 - Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN),
-  **Auto-Touch-Modus (Tap-to-Match) für iOS**, Desktop standardmäßig Drag&Drop,
-  im Spiel umschaltbar.
+  **Eigenes Pointer-Drag (funktioniert auch auf iOS)** + umschaltbarer Tap-Modus.
 - Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution (DE — EN),
   Next word (Skip), stabiler Items-Index (kein Vertauschen).
 """
@@ -338,16 +337,12 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                 st.rerun()
 
 
-# ---------- Wörter ziehen (Drag & Drop + Tap-to-Match für iOS) ----------
+# ---------- Wörter ziehen (Eigenes Pointer-Drag + Tap-Modus) ----------
 
 def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
     """
-    Tap-to-Match Fallback für iOS (auto), Drag&Drop auf Desktop:
-    - Timer (Start/Pause/Reset)
-    - Shuffle
-    - Congratulations + Time
-    - „Show solution“ als Tabelle (DE — EN) außerhalb des Canvas
-    - Im Widget: Button zum Umschalten zwischen Drag und Tap
+    Eigenes Dragging mit Pointer-Events (funktioniert auf iOS/Android/Desktop)
+    + optionaler Tap-Modus. Kein HTML5-Drag&Drop nötig.
     """
     pairs = [
         {"id": i, "de": r["de"], "en": r["en"]}
@@ -359,7 +354,7 @@ def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
         return
 
     st.write("Match the cards (DE ↔ EN).")
-    st.caption("On iPhone/iPad, tap two cards to match. On desktop, you can drag & drop.")
+    st.caption("You can drag a card onto its match. Alternatively, use Tap mode.")
 
     if show_solution_table:
         st.subheader("Solution (DE — EN)")
@@ -391,9 +386,15 @@ body {{
 .card {{
   background:white; border:2px solid var(--primary); border-radius:10px;
   padding:10px; margin:5px; min-width:120px; text-align:center;
-  touch-action: manipulation; cursor:pointer; transition: transform .06s ease;
+  touch-action: none; cursor:grab; transition: transform .06s ease;
+  position: relative;
 }}
-.card:active {{ transform: scale(0.98); }}
+.card.dragging {{
+  cursor:grabbing; box-shadow:0 8px 20px rgba(0,0,0,0.18);
+}}
+.placeholder {{
+  border:2px dashed #bbb; border-radius:10px; min-width:120px; height:40px; margin:5px;
+}}
 .correct {{ background:#e8f5e9; border-color:var(--success); cursor:default; }}
 .selected {{ box-shadow:0 0 0 3px rgba(33,150,243,0.35) inset; }}
 .wrong {{ animation: shake .25s linear; border-color: var(--danger)!important; }}
@@ -412,7 +413,7 @@ body {{
   <button class="btn" id="pauseBtn">Pause</button>
   <button class="btn" id="resetBtn">Reset</button>
   <button class="btn" id="shuffleBtn">Shuffle</button>
-  <button class="btn toggle" id="modeBtn">Mode: </button>
+  <button class="btn toggle" id="modeBtn">Mode: Drag</button>
 </div>
 
 <div id="box" class="grid" aria-live="polite"></div>
@@ -420,20 +421,11 @@ body {{
 
 <script>
 const pairs = {pairs_json};
-
-const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-// Feature detection: native drag&drop vorhanden?
-const nativeDnD = ('ondragstart' in document.createElement('div')) && !isiOS;
-// Start-Modus: iOS -> Tap, sonst Drag
-let TOUCH_MODE = isiOS ? true : false;
-
+let TOUCH_MODE = false; // umschaltbar
 let running = false, timerId = null, startTime = null, elapsed = 0; // ms
 let correctPairs = 0, solved = false;
-let draggedCard = null;
-let selectedCard = null;  // für Tap-Modus
 
+// ---- Timer ----
 function fmt(ms) {{
   const tenths = Math.floor((ms % 1000) / 100);
   ms = Math.floor(ms / 1000);
@@ -467,58 +459,147 @@ function resetTimer() {{
   document.getElementById('timer').textContent = "00:00.0";
 }}
 
+// ---- Helpers ----
 function clearBoard() {{
   const box = document.getElementById('box');
   box.innerHTML = "";
-  draggedCard = null; selectedCard = null;
   correctPairs = 0; solved = false;
   document.getElementById('result').textContent = "";
 }}
-
 function markCorrect(el) {{
   el.classList.add('correct'); el.setAttribute('aria-disabled','true');
   el.style.cursor = 'default';
+}}
+function shake(el) {{
+  el.classList.remove('wrong');
+  void el.offsetWidth;
+  el.classList.add('wrong');
+  setTimeout(() => el.classList.remove('wrong'), 250);
+}}
+function shuffleArray(arr) {{
+  for (let i = arr.length - 1; i > 0; i--) {{
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }}
+  return arr;
+}}
+function checkWin() {{
+  if (correctPairs === pairs.length && !solved) {{
+    solved = true;
+    pauseTimer();
+    const timeText = document.getElementById('timer').textContent;
+    const msg = "Congratulations! Time: " + timeText;
+    document.getElementById('result').textContent = msg;
+    alert(msg);
+  }}
 }}
 
 function createCard(text, pid) {{
   const c = document.createElement('div');
   c.className = 'card';
   c.textContent = text;
-  c.setAttribute('data-pid', String(pid));
+  c.dataset.pid = String(pid);
   c.setAttribute('role', 'button');
   c.setAttribute('tabindex', '0');
 
-  if (TOUCH_MODE || !nativeDnD) {{
-    // Tap-to-Match
-    c.addEventListener('click', () => handleTap(c));
-    c.addEventListener('keydown', (e) => {{
-      if (e.key === 'Enter' || e.key === ' ') handleTap(c);
-    }});
-  }} else {{
-    // Desktop Drag&Drop
-    c.draggable = true;
-    c.addEventListener('dragstart', () => {{ draggedCard = c; c.style.opacity='0.5'; }});
-    c.addEventListener('dragend', () => {{ c.style.opacity='1'; }});
-    c.addEventListener('dragover', e => e.preventDefault());
-    c.addEventListener('drop', e => {{
-      e.preventDefault();
-      if(!draggedCard || draggedCard===c || solved) return;
-      const a = draggedCard.getAttribute('data-pid');
-      const b = c.getAttribute('data-pid');
-      if (a === b) {{
-        markCorrect(draggedCard); markCorrect(c);
-        draggedCard = null; correctPairs += 1; checkWin();
-      }} else {{
-        shake(draggedCard); shake(c);
-        draggedCard.style.opacity='1'; draggedCard = null;
-      }}
-    }});
+  // ---- Tap-Modus ----
+  c.addEventListener('click', () => {{
+    if (!TOUCH_MODE) return;
+    handleTap(c);
+  }});
+  c.addEventListener('keydown', (e) => {{
+    if (!TOUCH_MODE) return;
+    if (e.key === 'Enter' || e.key === ' ') handleTap(c);
+  }});
+
+  // ---- Eigenes Dragging (Pointer-Events) ----
+  let dragging = false, placeholder = null, startX=0, startY=0, offX=0, offY=0, origWidth=0, origHeight=0;
+
+  function onPointerDown(ev) {{
+    if (TOUCH_MODE) return;              // im Tap-Modus kein Drag
+    if (c.classList.contains('correct')) return;
+    dragging = true;
+    c.setPointerCapture(ev.pointerId);
+    const rect = c.getBoundingClientRect();
+    origWidth = rect.width; origHeight = rect.height;
+    startX = ev.clientX; startY = ev.clientY;
+    offX = ev.clientX - rect.left; offY = ev.clientY - rect.top;
+
+    // Platzhalter einfügen, um Layout nicht springen zu lassen
+    placeholder = document.createElement('div');
+    placeholder.className = 'placeholder';
+    placeholder.style.width = rect.width + 'px';
+    placeholder.style.height = rect.height + 'px';
+    c.parentElement.insertBefore(placeholder, c);
+
+    // Karte aus dem Flow nehmen
+    c.classList.add('dragging');
+    c.style.position = 'fixed';
+    c.style.left = rect.left + 'px';
+    c.style.top = rect.top + 'px';
+    c.style.width = rect.width + 'px';
+    c.style.height = rect.height + 'px';
+    c.style.zIndex = 1000;
+
+    ev.preventDefault();
   }}
+
+  function onPointerMove(ev) {{
+    if (!dragging) return;
+    const x = ev.clientX - offX;
+    const y = ev.clientY - offY;
+    c.style.left = x + 'px';
+    c.style.top  = y + 'px';
+  }}
+
+  function onPointerUp(ev) {{
+    if (!dragging) return;
+    dragging = false;
+    c.releasePointerCapture(ev.pointerId);
+
+    // Ziel unter dem Pointer suchen
+    const dropTarget = document.elementFromPoint(ev.clientX, ev.clientY);
+    const cardTarget = dropTarget ? dropTarget.closest('.card') : null;
+
+    // Karte zurück in den Flow setzen
+    c.classList.remove('dragging');
+    c.style.position = '';
+    c.style.left = '';
+    c.style.top = '';
+    c.style.width = '';
+    c.style.height = '';
+    c.style.zIndex = '';
+
+    // Placeholder entfernen
+    if (placeholder) {{
+      placeholder.parentElement.insertBefore(c, placeholder);
+      placeholder.remove();
+      placeholder = null;
+    }}
+
+    // Prüfen auf Treffer (nicht auf sich selbst)
+    if (cardTarget && cardTarget !== c) {{
+      const a = c.dataset.pid, b = cardTarget.dataset.pid;
+      if (a === b) {{
+        markCorrect(c); markCorrect(cardTarget);
+        correctPairs += 1; checkWin();
+      }} else {{
+        shake(c); shake(cardTarget);
+      }}
+    }}
+  }}
+
+  c.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+
   return c;
 }}
 
+// Tap-Matching
+let selectedCard = null;
 function handleTap(card) {{
-  if (solved || card.classList.contains('correct')) return;
+  if (card.classList.contains('correct')) return;
   if (!selectedCard) {{
     selectedCard = card;
     card.classList.add('selected');
@@ -529,8 +610,8 @@ function handleTap(card) {{
     selectedCard = null;
     return;
   }}
-  const a = selectedCard.getAttribute('data-pid');
-  const b = card.getAttribute('data-pid');
+  const a = selectedCard.dataset.pid;
+  const b = card.dataset.pid;
   if (a === b) {{
     markCorrect(selectedCard); markCorrect(card);
     selectedCard.classList.remove('selected');
@@ -541,21 +622,6 @@ function handleTap(card) {{
     selectedCard.classList.remove('selected');
     selectedCard = null;
   }}
-}}
-
-function shake(el) {{
-  el.classList.remove('wrong');
-  void el.offsetWidth; // reflow zum Neustarten der Animation
-  el.classList.add('wrong');
-  setTimeout(() => el.classList.remove('wrong'), 250);
-}}
-
-function shuffleArray(arr) {{
-  for (let i = arr.length - 1; i > 0; i--) {{
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }}
-  return arr;
 }}
 
 function layoutShuffled() {{
@@ -572,20 +638,8 @@ function layoutShuffled() {{
   }}
 }}
 
-function checkWin() {{
-  if (correctPairs === pairs.length && !solved) {{
-    solved = true;
-    pauseTimer();
-    const timeText = document.getElementById('timer').textContent;
-    const msg = "Congratulations! Time: " + timeText;
-    document.getElementById('result').textContent = msg;
-    alert(msg);
-  }}
-}}
-
 function setModeLabel() {{
-  const b = document.getElementById('modeBtn');
-  b.textContent = "Mode: " + (TOUCH_MODE || !nativeDnD ? "Tap" : "Drag");
+  document.getElementById('modeBtn').textContent = "Mode: " + (TOUCH_MODE ? "Tap" : "Drag");
 }}
 
 document.getElementById('startBtn').addEventListener('click', () => startTimer());
@@ -593,7 +647,6 @@ document.getElementById('pauseBtn').addEventListener('click', () => pauseTimer()
 document.getElementById('resetBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
 document.getElementById('shuffleBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
 document.getElementById('modeBtn').addEventListener('click', () => {{
-  if (!nativeDnD) return; // auf iOS bleibt Tap
   TOUCH_MODE = !TOUCH_MODE;
   setModeLabel();
   layoutShuffled();
@@ -606,7 +659,7 @@ layoutShuffled();
 </body>
 </html>"""
 
-    st.components.v1.html(html, height=600, scrolling=True)
+    st.components.v1.html(html, height=640, scrolling=True)
 
 
 # ---------- Eingabe (DE → EN) ----------
@@ -620,190 +673,12 @@ def _hash_items(items):
 def game_input(df_view: pd.DataFrame, classe: str, page: int):
     """
     Eingabespiel (DE→EN):
-    - Stabiler Items-Index im State (keine Vertauschungen)
+    - Stabiler Items-Index im State
     - Timer, Enter zum Prüfen
     - Show solution (DE — EN), Next word (skip)
-    - Live-History mit Result (Correct/Wrong/Skipped)
+    - Live-History mit Result
     """
     items = [
         {"de": r["de"], "en": r["en"]}
         for r in df_view.to_dict("records")
-        if isinstance(r["de"], str) and isinstance(r["en"], str)
-    ]
-    if not items:
-        st.info("No vocabulary.")
-        return
-
-    state_key = f"input_state_{classe}_{page}"
-    st_state = st.session_state.get(state_key)
-
-    items_hash = _hash_items(items)
-    if (st_state is None) or (st_state.get("items_hash") != items_hash):
-        order = list(range(len(items)))
-        random.Random().shuffle(order)
-        st_state = {
-            "items_hash": items_hash,
-            "items": items,
-            "order": order,
-            "index": 0,
-            "score": 0,
-            "total": 0,
-            "history": [],  # {de, user, en, result}
-            "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
-        }
-        st.session_state[state_key] = st_state
-
-    _timer_block("Input", st_state["timer"], rerun_key=f"{state_key}_timer")
-
-    i = st_state["index"]
-    if i >= len(st_state["order"]):
-        t = st_state["timer"]
-        final_ms = t["elapsed_ms"] + (int(time.time() * 1000) - t["started_ms"] if t["running"] else 0)
-        t["running"] = False
-        st.success(f"Congratulations! You finished. Score: {st_state['score']} / {st_state['total']} — Time: {fmt_ms(final_ms)}")
-        if st_state["history"]:
-            df_hist = pd.DataFrame(st_state["history"])
-            st.subheader("History")
-            st.dataframe(
-                df_hist.rename(columns={
-                    "de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"
-                }),
-                use_container_width=True
-            )
-        return
-
-    idx = st_state["order"][i]
-    item = st_state["items"][idx]
-    st.write(f"**German (DE):** {item['de']}")
-
-    cskip, csol = st.columns(2)
-    with cskip:
-        if st.button("Next word (skip)", key=f"{state_key}_skip_{i}"):
-            st_state["history"].append({"de": item["de"], "user": "", "en": item["en"], "result": "Skipped"})
-            st_state["index"] += 1
-            st.session_state[state_key] = st_state
-            st.rerun()
-    with csol:
-        if st.button("Show solution", key=f"{state_key}_showsol_{i}"):
-            st.info(f"Solution: {item['de']} — {item['en']}")
-
-    with st.form(key=f"input_form_{state_key}_{i}", clear_on_submit=True):
-        user = st.text_input("English (EN):", key=f"user_{state_key}_{i}")
-        submitted = st.form_submit_button("Check (Enter)")
-
-    if submitted:
-        st_state["total"] += 1
-        ok = normalize_text(user) == normalize_text(item["en"])
-        res = "Correct" if ok else "Wrong"
-        if ok:
-            st_state["score"] += 1
-            st.success("Correct!")
-        else:
-            st.warning("Wrong.")
-        st_state["history"].append({"de": item["de"], "user": user, "en": item["en"], "result": res})
-        st_state["index"] += 1
-        st.session_state[state_key] = st_state
-        st.rerun()
-
-    if st_state["history"]:
-        df_hist = pd.DataFrame(st_state["history"])
-        st.subheader("History (so far)")
-        st.dataframe(
-            df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}).tail(10),
-            use_container_width=True
-        )
-
-
-# ============================ Main ============================
-
-def main():
-    st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
-    st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
-
-    c_left, c_mid, c_debug = st.columns([2, 1, 1])
-    with c_left:
-        st.caption("Quelle: CSVs unter `/data/pages/klasseK/klasseK_pageS.csv`.")
-    with c_mid:
-        if st.button("Cache leeren"):
-            st.cache_data.clear(); st.rerun()
-    with c_debug:
-        debug_on = st.toggle("Debug an/aus", value=False)
-
-    DATA_DIR = Path(__file__).parent / "data"
-
-    file_info_df = get_vocab_file_info(DATA_DIR)
-    file_info_df = file_info_df[file_info_df["classe"].isin({"7", "8", "9"})]
-    file_info_df = file_info_df[file_info_df["is_page_specific"] == True]
-
-    if file_info_df.empty:
-        st.warning("Keine seiten-spezifischen CSVs für Klassen 7–9 gefunden.")
-        return
-
-    classe = st.selectbox("Klasse", sorted(file_info_df["classe"].unique(), key=int), index=2)
-    pages = sorted(file_info_df[file_info_df["classe"] == classe]["page"].unique(), key=int)
-    if not pages:
-        st.warning(f"Keine Seiten für Klasse {classe} gefunden.")
-        return
-
-    page = st.selectbox("Seite", pages, index=0)
-
-    page_specific_paths = file_info_df[
-        (file_info_df['classe'] == classe) &
-        (file_info_df['page'] == page)
-    ]['path']
-
-    if page_specific_paths.empty:
-        st.info("Für diese Seite existiert keine seiten-spezifische CSV unter data/pages/klasseX/klasseX_pageY.csv.")
-        return
-
-    df_view = load_and_preprocess_df(page_specific_paths.iloc[0])
-    df_view = _filter_by_page_rows(df_view, int(classe), int(page))
-
-    if df_view.empty:
-        st.info("Keine Vokabeln für diese Seite.")
-        return
-
-    st.write(f"**Vokabeln verfügbar:** {len(df_view)}")
-
-    if debug_on:
-        with st.expander("Debug-Info"):
-            st.write("Datei-Info (erste 50):", file_info_df.head(50))
-            st.write("Beispiel-Daten (erste 20):", df_view.head(20))
-            st.write("Seitenverteilung:", df_view["page"].value_counts().head(10))
-
-    st.subheader("Filter: Nur Einzelwörter")
-    col1, col2, col3 = st.columns([1.5, 1, 1])
-    with col1:
-        filter_simple = st.checkbox("Nur Einzelwörter aktivieren", value=False)
-    with col2:
-        ignore_articles = st.checkbox("Artikel (to/the/a/an) ignorieren", value=True)
-    with col3:
-        ignore_abbrev = st.checkbox("Abkürzungen (z. B. sth/sb) ignorieren", value=True)
-    min_length = st.slider("Minimale Wortlänge", 1, 6, 2, 1)
-
-    if filter_simple:
-        mask = df_view["en"].apply(lambda x: is_simple_word(
-            x, ignore_articles=ignore_articles, ignore_abbrev=ignore_abbrev, min_length=min_length
-        ))
-        df_view = df_view[mask].reset_index(drop=True)
-        st.write(f"**Vokabeln nach Filter:** {len(df_view)}")
-        if df_view.empty:
-            st.info("Der Filter entfernt alle Vokabeln. Passe die Einstellungen an.")
-            return
-
-    seed_val = st.text_input("Seed (optional – gleiche Reihenfolge für alle)", value="")
-    game = st.selectbox("Wähle ein Spiel", ("Hangman", "Wörter ziehen", "Eingabe (DE → EN)"))
-
-    if game == "Hangman":
-        game_hangman(df_view, classe, page, seed_val)
-    elif game == "Wörter ziehen":
-        show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
-        game_drag_pairs(df_view, show_solution_table=show_solution_table)
-    else:
-        game_input(df_view, classe, page)
-
-    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Insgesamt geladene Vokabeln: {len(df_view)}")
-
-
-if __name__ == "__main__":
-    main()
+        if isinstance(r["de"], str) and isinstance(r
