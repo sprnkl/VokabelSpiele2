@@ -8,7 +8,7 @@ Spalten: classe, page, de, en
 Spiele/Features:
 - Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
   Next word & New word.
-- Wörtermemory (DE↔EN): Click/Tap-to-Match (alle Plattformen), optional Desktop-Drag,
+- Wörter Memory (DE↔EN): Click/Tap-to-Match (alle Plattformen), optional Desktop-Drag,
   Timer, Show solution (DE—EN), Anzahl der Paare wählbar (ganze Seite ODER k-Paare), Seed-stabil.
 - Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution, Next word (Skip),
   stabiler Items-Index (kein Vertauschen).
@@ -371,7 +371,7 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
             if st.button("New word", key=f"{key}_newword2"):
                 new_word(); st.rerun()
 
-# ---------- Wörtermemory (DE↔EN; Click/Tap; optional Drag) ----------
+# ---------- Wörter Memory (DE↔EN; Click/Tap; optional Drag) ----------
 def game_word_memory(df_view: pd.DataFrame, classe: str, page: int,
                      show_solution_table: bool, subset_mode: str, subset_k: int,
                      seed_val: str, force_new_subset: bool = False):
@@ -905,7 +905,7 @@ def main():
     # WICHTIG: Hier steht das neue Spiel GENAU so im Menü, wie du es wolltest
     game = st.selectbox("Wähle ein Spiel", (
         "Hangman",
-        "Wörtermemory",
+        "Wörter Memory",
         "Eingabe (DE → EN)",
         "Unregelmäßige Verben Memory",
     ))
@@ -917,9 +917,9 @@ def main():
         else:
             game_hangman(df_view, classe, page, seed_val)
 
-    elif game == "Wörtermemory":
+    elif game == "Wörter Memory":
         if df_view.empty:
-            st.info("Für Wörtermemory sind Seiten-Vokabeln nötig.")
+            st.info("Für Wörter Memory sind Seiten-Vokabeln nötig.")
         else:
             max_pairs = len(df_view)
 
