@@ -373,42 +373,79 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
 
 # ---------- Wörtermemory (DE↔EN; Click/Tap; optional Drag) ----------
 def game_word_memory(df_view: pd.DataFrame, classe: str, page: int,
-                     show_solution_table: bool, subset_mode: str, subset_k: int, seed_val: str):
-    base_items = [{"de": r["de"], "en": r["en"]} for r in df_view.to_dict("records") if isinstance(r["de"], str) and isinstance(r["en"], str)]
+                     show_solution_table: bool, subset_mode: str, subset_k: int,
+                     seed_val: str, force_new_subset: bool = False):
+    # Basis-Items
+    base_items = [
+        {"de": r["de"], "en": r["en"]}
+        for r in df_view.to_dict("records")
+        if isinstance(r["de"], str) and isinstance(r["en"], str)
+    ]
     if not base_items:
         st.info("No vocabulary.")
         return
 
+    # Session-Key für die stabile Auswahl dieses Seiten-Sets
     subset_state_key = f"memory_subset_{classe}_{page}"
-    items = _sample_subset(base_items, subset_mode, subset_k, seed_val, subset_state_key, ["de","en"])
+
+    # NEU: auf Knopfdruck die bisherige Auswahl verwerfen → neue Stichprobe
+    if force_new_subset:
+        st.session_state.pop(subset_state_key, None)
+
+    # Teil-Set ziehen (entweder ganze Seite oder k-Paare)
+    items = _sample_subset(base_items, subset_mode, subset_k, seed_val,
+                           subset_state_key, ["de", "en"])
 
     st.write(f"Pairs in this round: **{len(items)}**")
     st.caption("Klicke zwei Karten, die zusammengehören (DE ↔ EN). Optional: Drag-Modus auf Desktop.")
 
     if show_solution_table:
         st.subheader("Solution (DE — EN)")
-        st.dataframe(pd.DataFrame(items)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}), use_container_width=True)
+        st.dataframe(pd.DataFrame(items)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}),
+                     use_container_width=True)
 
-    pairs_json = json.dumps([{"id": i, "de": it["de"], "en": it["en"]} for i, it in enumerate(items)], ensure_ascii=False)
+    # --- Frontend (unverändert) ---
+    pairs_json = json.dumps(
+        [{"id": i, "de": it["de"], "en": it["en"]} for i, it in enumerate(items)],
+        ensure_ascii=False
+    )
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
-:root {{ --primary:#2196F3; --success:#2e7d32; --danger:#d32f2f; }}
+:root {{ --primary:#2196F3; --success:#2e7d32; --muted:#666; --danger:#d32f2f; }}
 * {{ -webkit-tap-highlight-color: transparent; }}
-body {{ font-family: Arial, sans-serif; margin:0; padding:10px; background:#f6f7fb; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }}
+body {{
+  font-family: Arial, sans-serif; margin:0; padding:10px; background:#f6f7fb;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}}
 #toolbar {{ display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }}
-#timer {{ font-weight:bold; padding:4px 8px; border:1px solid #ccc; border-radius:6px; background:white; min-width:90px; text-align:center; }}
-.btn {{ padding:6px 10px; border:1px solid var(--primary); background:white; color:var(--primary); border-radius:8px; cursor:pointer; font-weight:bold; touch-action:manipulation; }}
+#timer {{
+  font-weight:bold; padding:4px 8px; border:1px solid #ccc; border-radius:6px;
+  background:white; min-width:90px; text-align:center;
+}}
+.btn {{
+  padding:6px 10px; border:1px solid var(--primary); background:white; color:var(--primary);
+  border-radius:8px; cursor:pointer; font-weight:bold; touch-action: manipulation;
+}}
 .toggle {{ border-color:#555; color:#555; }}
 .btn:disabled {{ opacity:0.5; cursor:not-allowed; }}
 .grid {{ display:flex; flex-wrap:wrap; gap:8px; }}
-.card {{ background:white; border:2px solid var(--primary); border-radius:10px; padding:10px; margin:5px; min-width:120px; text-align:center; touch-action:manipulation; cursor:pointer; transition:transform .06s ease; -webkit-user-drag:element; }}
+.card {{
+  background:white; border:2px solid var(--primary); border-radius:10px;
+  padding:10px; margin:5px; min-width:120px; text-align:center;
+  touch-action: manipulation; cursor:pointer; transition: transform .06s ease;
+  -webkit-user-drag: element;
+}}
 .card:active {{ transform: scale(0.98); }}
 .correct {{ background:#e8f5e9; border-color:var(--success); cursor:default; }}
 .selected {{ box-shadow:0 0 0 3px rgba(33,150,243,0.35) inset; }}
 .wrong {{ animation: shake .25s linear; border-color: var(--danger)!important; }}
-@keyframes shake {{ 0%,100% {{ transform: translateX(0); }} 25% {{ transform: translateX(-4px); }} 75% {{ transform: translateX(4px); }} }}
+@keyframes shake {{
+  0%,100% {{ transform: translateX(0); }}
+  25% {{ transform: translateX(-4px); }}
+  75% {{ transform: translateX(4px); }}
+}}
 #result {{ margin-top:10px; font-weight:bold; color:var(--success); }}
 </style>
 </head>
@@ -432,29 +469,104 @@ let TAP_MODE = true;
 
 let running = false, timerId = null, startTime = null, elapsed = 0;
 let correctPairs = 0, solved = false;
-let draggedCard = null, selectedCard = null;
+let draggedCard = null;
+let selectedCard = null;
 
-function fmt(ms) {{ const t = Math.floor(ms%1000/100); ms = Math.floor(ms/1000); const s = ms%60; const m = Math.floor(ms/60); return String(m).padStart(2,'0')+":"+String(s).padStart(2,'0')+"."+t; }}
-function updateTimer() {{ if (!running) return; document.getElementById('timer').textContent = fmt(Date.now()-startTime); }}
-function startTimer() {{ if (solved) return; if (!running) {{ startTime = Date.now()-elapsed; timerId = setInterval(updateTimer,100); running = true; }} }}
-function pauseTimer() {{ if (running) {{ clearInterval(timerId); elapsed = Date.now()-startTime; running = false; }} }}
-function resetTimer() {{ clearInterval(timerId); running=false; startTime=null; elapsed=0; document.getElementById('timer').textContent="00:00.0"; }}
+function fmt(ms) {{
+  const tenths = Math.floor((ms % 1000) / 100);
+  ms = Math.floor(ms / 1000);
+  const s = ms % 60;
+  const m = Math.floor(ms / 60);
+  return String(m).padStart(2,'0') + ":" + String(s).padStart(2,'0') + "." + tenths;
+}}
+function updateTimer() {{
+  if (!running) return;
+  const now = Date.now();
+  document.getElementById('timer').textContent = fmt(now - startTime);
+}}
+function startTimer() {{
+  if (solved) return;
+  if (!running) {{
+    startTime = Date.now() - elapsed;
+    timerId = setInterval(updateTimer, 100);
+    running = true;
+  }}
+}}
+function pauseTimer() {{
+  if (running) {{
+    clearInterval(timerId);
+    elapsed = Date.now() - startTime;
+    running = false;
+  }}
+}}
+function resetTimer() {{
+  clearInterval(timerId);
+  running = false; startTime = null; elapsed = 0;
+  document.getElementById('timer').textContent = "00:00.0";
+}}
 
-function clearBoard() {{ const box=document.getElementById('box'); box.innerHTML=""; draggedCard=null; selectedCard=null; correctPairs=0; solved=false; document.getElementById('result').textContent=""; }}
-function markCorrect(el) {{ el.classList.add('correct'); el.setAttribute('aria-disabled','true'); el.style.cursor='default'; }}
+function clearBoard() {{
+  const box = document.getElementById('box');
+  box.innerHTML = "";
+  draggedCard = null; selectedCard = null;
+  correctPairs = 0; solved = false;
+  document.getElementById('result').textContent = "";
+}}
+
+function markCorrect(el) {{
+  el.classList.add('correct'); el.setAttribute('aria-disabled','true');
+  el.style.cursor = 'default';
+}}
 
 function createCard(text, pid) {{
-  const c=document.createElement('div'); c.className='card'; c.textContent=text; c.setAttribute('data-pid', String(pid)); c.setAttribute('role','button'); c.setAttribute('tabindex','0');
+  const c = document.createElement('div');
+  c.className = 'card';
+  c.textContent = text;
+  c.setAttribute('data-pid', String(pid));
+  c.setAttribute('role', 'button');
+  c.setAttribute('tabindex', '0');
+
   if (TAP_MODE || !nativeDnD) {{
-    c.addEventListener('click', ()=>handleTap(c));
-    c.addEventListener('keydown', (e)=>{{ if(e.key==='Enter'||e.key===' ') handleTap(c); }});
+    c.addEventListener('click', () => handleTap(c));
+    c.addEventListener('keydown', (e) => {{
+      if (e.key === 'Enter' || e.key === ' ') handleTap(c);
+    }});
   }} else {{
-    c.draggable=true;
-    c.addEventListener('dragstart',(e)=>{{ draggedCard=c; c.style.opacity='0.5'; try{{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', c.getAttribute('data-pid')); }}catch(_e){{}} }});
-    c.addEventListener('dragend',()=>{{ c.style.opacity='1'; }});
-    c.addEventListener('dragover',(e)=>{{ e.preventDefault(); try{{ e.dataTransfer.dropEffect='move'; }}catch(_e){{}} }});
-    c.addEventListener('drop',(e)=>{{ e.preventDefault(); if(solved) return; let srcPid=null; try{{ srcPid=e.dataTransfer.getData('text/plain'); }}catch(_e){{}} if(!srcPid&&draggedCard) srcPid=draggedCard.getAttribute('data-pid'); const tgtPid=c.getAttribute('data-pid'); if(!srcPid) return;
-      if(srcPid===tgtPid){{ if(draggedCard) markCorrect(draggedCard); markCorrect(c); draggedCard=null; correctPairs+=1; checkWin(); }} else {{ if(draggedCard) shake(draggedCard); shake(c); if(draggedCard) draggedCard.style.opacity='1'; draggedCard=null; }}
+    c.draggable = true;
+    c.addEventListener('dragstart', (e) => {{
+      draggedCard = c;
+      c.style.opacity = '0.5';
+      try {{
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', c.getAttribute('data-pid'));
+      }} catch(_e) {{}}
+    }});
+    c.addEventListener('dragend', () => {{
+      c.style.opacity = '1';
+    }});
+    c.addEventListener('dragover', (e) => {{
+      e.preventDefault();
+      try {{ e.dataTransfer.dropEffect = 'move'; }} catch(_e) {{}}
+    }});
+    c.addEventListener('drop', (e) => {{
+      e.preventDefault();
+      let srcPid = null;
+      try {{ srcPid = e.dataTransfer.getData('text/plain'); }} catch(_e) {{}}
+      if (!srcPid && draggedCard) srcPid = draggedCard.getAttribute('data-pid');
+      const tgtPid = c.getAttribute('data-pid');
+      if (!srcPid) return;
+      if (srcPid === tgtPid) {{
+        if (draggedCard) markCorrect(draggedCard);
+        markCorrect(c);
+        draggedCard = null;
+        correctPairs += 1;
+        checkWin();
+      }} else {{
+        if (draggedCard) shake(draggedCard);
+        shake(c);
+        if (draggedCard) draggedCard.style.opacity = '1';
+        draggedCard = null;
+      }}
     }});
   }}
   return c;
@@ -462,29 +574,95 @@ function createCard(text, pid) {{
 
 function handleTap(card) {{
   if (solved || card.classList.contains('correct')) return;
-  if (!selectedCard) {{ selectedCard=card; card.classList.add('selected'); return; }}
-  if (selectedCard===card) {{ card.classList.remove('selected'); selectedCard=null; return; }}
-  const a=selectedCard.getAttribute('data-pid'); const b=card.getAttribute('data-pid');
-  if (a===b) {{ markCorrect(selectedCard); markCorrect(card); selectedCard.classList.remove('selected'); selectedCard=null; correctPairs+=1; checkWin(); }}
-  else {{ shake(selectedCard); shake(card); selectedCard.classList.remove('selected'); selectedCard=null; }}
+  if (!selectedCard) {{
+    selectedCard = card;
+    card.classList.add('selected');
+    return;
+  }}
+  if (selectedCard === card) {{
+    card.classList.remove('selected');
+    selectedCard = null;
+    return;
+  }}
+  const a = selectedCard.getAttribute('data-pid');
+  const b = card.getAttribute('data-pid');
+  if (a === b) {{
+    markCorrect(selectedCard); markCorrect(card);
+    selectedCard.classList.remove('selected');
+    selectedCard = null;
+    correctPairs += 1; checkWin();
+  }} else {{
+    shake(selectedCard); shake(card);
+    selectedCard.classList.remove('selected');
+    selectedCard = null;
+  }}
 }}
 
-function shake(el) {{ el.classList.remove('wrong'); void el.offsetWidth; el.classList.add('wrong'); setTimeout(()=>el.classList.remove('wrong'),250); }}
-function shuffleArray(arr) {{ for(let i=arr.length-1;i>0;i--){{ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; }} return arr; }}
-function layoutShuffled() {{ clearBoard(); const box=document.getElementById('box'); let cards=[]; for(const p of pairs){{ cards.push({{text:p.de,pid:p.id}}); cards.push({{text:p.en,pid:p.id}}); }} shuffleArray(cards); for(const c of cards) box.appendChild(createCard(c.text,c.pid)); }}
-function checkWin() {{ if (correctPairs===pairs.length && !solved) {{ solved=true; pauseTimer(); const msg="Congratulations! Time: "+document.getElementById('timer').textContent; document.getElementById('result').textContent=msg; alert(msg); }} }}
-function setModeLabel() {{ const b=document.getElementById('modeBtn'); b.textContent="Mode: "+(TAP_MODE || !nativeDnD ? "Tap" : "Drag"); }}
+function shake(el) {{
+  el.classList.remove('wrong');
+  void el.offsetWidth;
+  el.classList.add('wrong');
+  setTimeout(() => el.classList.remove('wrong'), 250);
+}}
 
-document.getElementById('startBtn').addEventListener('click', ()=>startTimer());
-document.getElementById('pauseBtn').addEventListener('click', ()=>pauseTimer());
-document.getElementById('resetBtn').addEventListener('click', ()=>{{ resetTimer(); layoutShuffled(); }});
-document.getElementById('shuffleBtn').addEventListener('click', ()=>{{ resetTimer(); layoutShuffled(); }});
-document.getElementById('modeBtn').addEventListener('click', ()=>{{ if(!nativeDnD) return; TAP_MODE=!TAP_MODE; setModeLabel(); layoutShuffled(); }});
-setModeLabel(); layoutShuffled();
+function shuffleArray(arr) {{
+  for (let i = arr.length - 1; i > 0; i--) {{
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }}
+  return arr;
+}}
+
+function layoutShuffled() {{
+  clearBoard();
+  const box = document.getElementById('box');
+  let cards = [];
+  for (const p of pairs) {{
+    cards.push({{ text: p.de, pid: p.id }});
+    cards.push({{ text: p.en, pid: p.id }});
+  }}
+  shuffleArray(cards);
+  for (const c of cards) {{
+    box.appendChild(createCard(c.text, c.pid));
+  }}
+}}
+
+function checkWin() {{
+  if (correctPairs === pairs.length && !solved) {{
+    solved = true;
+    pauseTimer();
+    const timeText = document.getElementById('timer').textContent;
+    const msg = "Congratulations! Time: " + timeText;
+    document.getElementById('result').textContent = msg;
+    alert(msg);
+  }}
+}}
+
+function setModeLabel() {{
+  const b = document.getElementById('modeBtn');
+  b.textContent = "Mode: " + (TAP_MODE || !nativeDnD ? "Tap" : "Drag");
+}}
+
+document.getElementById('startBtn').addEventListener('click', () => startTimer());
+document.getElementById('pauseBtn').addEventListener('click', () => pauseTimer());
+document.getElementById('resetBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
+document.getElementById('shuffleBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
+document.getElementById('modeBtn').addEventListener('click', () => {{
+  if (!nativeDnD) return;
+  TAP_MODE = !TAP_MODE;
+  setModeLabel();
+  layoutShuffled();
+}});
+
+// Initial
+setModeLabel();
+layoutShuffled();
 </script>
 </body>
 </html>"""
+
     st.components.v1.html(html, height=600, scrolling=True)
+
 
 # ---------- Eingabe (DE → EN) ----------
 def game_input(df_view: pd.DataFrame, classe: str, page: int):
@@ -741,24 +919,44 @@ def main():
             game_hangman(df_view, classe, page, seed_val)
 
     elif game == "Wörtermemory":
-        if df_view.empty:
-            st.info("Für Wörtermemory sind Seiten-Vokabeln nötig.")
-        else:
-            max_pairs = len(df_view)
-            cA, cB, cC = st.columns([1, 1, 1.5])
-            with cA:
-                subset_all = st.checkbox("Ganze Seite abfragen", value=True)
-            with cB:
-                if subset_all:
-                    subset_k = max_pairs
-                    st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=max_pairs, step=1, disabled=True)
-                else:
-                    default_k = min(10, max_pairs) if max_pairs >= 2 else max_pairs
-                    subset_k = st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=default_k, step=1)
-            with cC:
-                show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
-            subset_mode = "all" if subset_all else "k"
-            game_word_memory(df_view, classe, page, show_solution_table, subset_mode, int(subset_k), seed_val)
+    if df_view.empty:
+        st.info("Für Wörtermemory sind Seiten-Vokabeln nötig.")
+    else:
+        max_pairs = len(df_view)
+
+        cA, cB, cC = st.columns([1, 1, 1.5])
+        with cA:
+            subset_all = st.checkbox("Ganze Seite abfragen", value=True)
+        with cB:
+            if subset_all:
+                subset_k = max_pairs
+                st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs,
+                                value=max_pairs, step=1, disabled=True)
+            else:
+                default_k = min(10, max_pairs) if max_pairs >= 2 else max_pairs
+                subset_k = st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs,
+                                           value=default_k, step=1)
+        with cC:
+            show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
+
+        # NEU: Button, der eine neue Stichprobe aus der Seite erzwingt
+        col_new, _ = st.columns([1, 3])
+        with col_new:
+            refresh_subset = st.button(
+                "Neue Wortauswahl (neue Paare)",
+                disabled=subset_all or max_pairs < 2,
+                help="Zieht ein neues zufälliges Teil-Set von dieser Seite."
+            )
+
+        subset_mode = "all" if subset_all else "k"
+
+        game_word_memory(
+            df_view, classe, page,
+            show_solution_table, subset_mode, int(subset_k),
+            seed_val,
+            force_new_subset=refresh_subset   # <<<<< NEU
+        )
+
 
     elif game == "Eingabe (DE → EN)":
         if df_view.empty:
