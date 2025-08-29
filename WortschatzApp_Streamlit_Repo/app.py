@@ -31,7 +31,7 @@ import hashlib
 import pandas as pd
 import streamlit as st
 
-# Seite konfigurieren (muss ganz früh stehen)
+# Seite konfigurieren (muss sehr früh stehen)
 st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
 
 # ============================ UNREGELMÄSSIGE VERBEN – DIREKT IM CODE ============================
@@ -658,7 +658,7 @@ function shake(el) {{
 function shuffleArray(arr) {{
   for (let i = arr.length - 1; i > 0; i--) {{
     const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr{i}];
+    [arr[i], arr[j]] = [arr[j], arr[i]];
   }}
   return arr;
 }}
@@ -953,7 +953,9 @@ def main():
     df_view = pd.DataFrame()
 
     if not file_info_df.empty:
-        classe = st.selectbox("Klasse", sorted(file_info_df["classe"].unique(), key=int), index=min(2, len(file_info_df["classe"].unique())-1))
+        classes_sorted = sorted(file_info_df["classe"].unique(), key=int)
+        default_idx = min(2, len(classes_sorted) - 1) if classes_sorted else 0
+        classe = st.selectbox("Klasse", classes_sorted, index=default_idx)
         pages = sorted(file_info_df[file_info_df["classe"] == classe]["page"].unique(), key=int)
         if pages:
             page = st.selectbox("Seite", pages, index=0)
