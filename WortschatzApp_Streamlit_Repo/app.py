@@ -10,11 +10,11 @@ Spalten: classe, page, de, en
 Spiele/Features:
 - Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
   Next word & New word.
-- Wörtermemory (DE↔EN): Click/Tap-to-Match (alle Plattformen), optional Desktop-Drag,
+- Wörter Memory (DE↔EN): Click/Tap-to-Match (alle Plattformen), optional Desktop-Drag,
   Timer, Show solution (DE—EN), Anzahl der Paare wählbar (ganze Seite ODER k-Paare), Seed-stabil,
   Button: „Neue Wortauswahl (neue Paare)“.
 - Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution, Next word (Skip).
-- Unregelmäßige Verbenmemory (aus Code): Tap-to-Match von 4 Feldern
+- Unregelmäßige Verben Memory (aus Code): Tap-to-Match von 4 Feldern
   (Infinitive–Past Simple–Past Participle–Deutsch), tolerant bei Slash-Formen,
   Bugfix: Deutsch („meaning“) wird korrekt gematcht.
 """
@@ -421,7 +421,7 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
             if st.button("New word", key=f"{key}_newword2"):
                 new_word(); st.rerun()
 
-# ---------- Wörtermemory (DE↔EN; Click/Tap; optional Drag) ----------
+# ---------- Wörter Memory (DE↔EN; Click/Tap; optional Drag) ----------
 def game_word_memory(df_view: pd.DataFrame, classe: str, page: int,
                      show_solution_table: bool, subset_mode: str, subset_k: int,
                      seed_val: str, force_new_subset: bool = False):
@@ -803,7 +803,7 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
             use_container_width=True
         )
 
-# ---------- Unregelmäßige Verbenmemory (aus Code) ----------
+# ---------- Unregelmäßige Verben Memory (aus Code) ----------
 def game_irregulars_assign():
     # Gleiche Normalisierung für beide Seiten. Bei Deutsch KEIN Slash-Splitting.
     def allowed_forms(target_key: str, verb: dict) -> set[str]:
@@ -841,7 +841,7 @@ def game_irregulars_assign():
     if "verbs_selected_idx" not in st.session_state:
         st.session_state.verbs_selected_idx = None
 
-    st.subheader("Unregelmäßige Verbenmemory (Tippen statt Ziehen)")
+    st.subheader("Unregelmäßige Verben Memory (Tippen statt Ziehen)")
     st.caption("Links ein Wort wählen, rechts das Ziel tippen. Slash-Formen (z. B. was/were) werden akzeptiert.")
 
     c1, c2, c3 = st.columns(3)
@@ -930,7 +930,7 @@ def game_irregulars_assign():
 # ============================ Main ============================
 
 def main():
-    st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
+    st.title("Wortschatz-Spiele (Klassen 7–9) Grundkurs")
 
     c_left, c_mid, c_debug = st.columns([2, 1, 1])
     with c_left:
@@ -1002,13 +1002,13 @@ def main():
 
     # Spielauswahl
     if file_info_df.empty:
-        game = st.selectbox("Wähle ein Spiel", ("Unregelmäßige Verbenmemory",))
+        game = st.selectbox("Wähle ein Spiel", ("Unregelmäßige Verben Memory",))
     else:
         game = st.selectbox("Wähle ein Spiel", (
             "Hangman",
-            "Wörtermemory",
+            "Wörter Memory",
             "Eingabe (DE → EN)",
-            "Unregelmäßige Verbenmemory",
+            "Unregelmäßige Verben Memory",
         ))
 
     if game == "Hangman":
@@ -1017,9 +1017,9 @@ def main():
         else:
             game_hangman(df_view, classe, page, seed_val)
 
-    elif game == "Wörtermemory":
+    elif game == "Wörter Memory":
         if df_view.empty:
-            st.info("Für Wörtermemory sind Seiten-Vokabeln nötig.")
+            st.info("Für Wörter Memory sind Seiten-Vokabeln nötig.")
         else:
             max_pairs = len(df_view)
 
@@ -1068,7 +1068,7 @@ def main():
         else:
             game_input(df_view, classe, page)
 
-    else:  # Unregelmäßige Verbenmemory
+    else:  # Unregelmäßige Verben Memory
         game_irregulars_assign()
 
     st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Geladene Vokabeln (Seite): {len(df_view)}")
