@@ -6,16 +6,16 @@ Vereinfachte, robuste Version:
   (data/pages/klasseK/klasseK_pageS.csv). Kein "bis einschließlich"-Modus.
 - Nach dem Laden wird zusätzlich zeilenweise auf (classe==K, page==S) gefiltert.
 - CSVs werden rekursiv aus data/ geladen, Trennzeichen automatisch (Komma/Semikolon).
-- Spalten werden normalisiert auf: classe, page, de, en.
-- Spiele: Hangman (Galgenmännchen), Wörter ziehen (Drag & Drop), Eingabe (DE→EN).
-- Optionaler Filter: "Nur Einzelwörter".
+- Spalten: classe, page, de, en.
 
-Neu/Fixes:
+Spiele/Features:
 - Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
-  Next word (Sequenz), **New word (skip)** jederzeit.
-- Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN) außerhalb des Canvas.
-- Eingabe (DE→EN): Enter zum Prüfen (Form), **stabile Item-Liste** (kein falsches Mapping),
-  History-Tabelle live, Show solution (DE — EN), **Next word (skip)**.
+  Next word (Sequenz) & New word (Skip).
+- Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN),
+  **Auto-Touch-Modus (Tap-to-Match) für iOS**, Desktop standardmäßig Drag&Drop,
+  im Spiel umschaltbar.
+- Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution (DE — EN),
+  Next word (Skip), stabiler Items-Index (kein Vertauschen).
 """
 
 import re
@@ -50,7 +50,6 @@ def is_simple_word(
     ignore_abbrev: bool = True,
     min_length: int = 2,
 ) -> bool:
-    """Heuristik: nur simple Einzelwörter zulassen (für Lernspiele nützlich)."""
     if not isinstance(word, str):
         return False
     w = word.strip()
@@ -66,7 +65,6 @@ def is_simple_word(
 
 
 def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFrame:
-    """Erzwinge zeilenweises Filtern: nur genau die gewählte Seite und Klasse."""
     if df is None or df.empty:
         return df
     cols = {c.lower(): c for c in df.columns}
@@ -85,7 +83,6 @@ def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFra
 
 
 def fmt_ms(ms: int) -> str:
-    """mm:ss.t (Zehntelsekunde)"""
     if ms < 0:
         ms = 0
     tenths = (ms % 1000) // 100
@@ -111,11 +108,6 @@ HANGMAN_PICS = [
 
 @st.cache_data(show_spinner=False)
 def get_vocab_file_info(data_dir: Path) -> pd.DataFrame:
-    """
-    Scannt das data-Verzeichnis und liefert Metadaten zu seiten-spezifischen CSVs:
-    - 'is_page_specific' == True, wenn der Pfad dem Muster data/pages/klasseK/klasseK_pageS.csv entspricht.
-    - Wir behalten nur Klassen 7–9.
-    """
     file_info = []
     base = Path(data_dir)
     page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
@@ -142,16 +134,12 @@ def get_vocab_file_info(data_dir: Path) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_and_preprocess_df(path: Path) -> pd.DataFrame:
-    """
-    Lädt eine CSV und normalisiert die Spalten auf: classe, page, de, en.
-    """
     try:
         df = pd.read_csv(path, sep=None, engine="python")
     except Exception as e:
         st.warning(f"CSV-Fehler {path.name}: {e}")
         return pd.DataFrame()
 
-    # Spalten auf Standardnamen abbilden
     col_map = {}
     for c in df.columns:
         lc = str(c).strip().lower()
@@ -179,10 +167,6 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
 # ============================ Timer-UI ============================
 
 def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
-    """
-    Timer-UI (Start/Pause/Reset).
-    timer: dict in st.session_state (mutierbar)
-    """
     now_ms = int(time.time() * 1000)
     current_ms = timer["elapsed_ms"] + (now_ms - timer["started_ms"] if timer["running"] else 0)
 
@@ -217,14 +201,6 @@ def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
 # ---------- Hangman ----------
 
 def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
-    """
-    Hangman:
-    - Timer (Start/Pause/Reset)
-    - Show German hint (optional)
-    - Show solution
-    - Congratulations + Time
-    - Next word (Sequenz), New word (skip) jederzeit
-    """
     key = f"hangman_{classe}_{page}"
     state = st.session_state.get(key)
 
@@ -233,7 +209,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
         st.info("No vocabulary available.")
         return
 
-    # Initialisieren / Reihenfolge vorbereiten
     if state is None:
         order = list(range(len(rows)))
         rnd = random.Random(seed_val) if seed_val else random.Random()
@@ -253,7 +228,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
         }
         st.session_state[key] = state
 
-    # Helper: zum nächsten Wort in Sequenz
     def next_word():
         t = state["timer"]
         t["running"] = False
@@ -274,7 +248,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
         state["solved"] = False
         st.session_state[key] = state
 
-    # Helper: neues (zufälliges) Wort – Skip (kann auch dasselbe sein wie Next)
     def new_word():
         t = state["timer"]
         t["running"] = False
@@ -292,10 +265,8 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
     solution, hint = state["solution"], state["hint"]
     t = state["timer"]
 
-    # Timer-Block
     _timer_block("Hangman", t, rerun_key=f"{key}_timer")
 
-    # Optionen / Hint / Lösung / New word
     opt1, opt2, opt3 = st.columns(3)
     with opt1:
         state["show_hint"] = st.checkbox("Show German hint", value=state.get("show_hint", False), key=f"{key}_showhint")
@@ -311,7 +282,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
     if state["show_hint"]:
         st.write(f"**German (hint):** {hint}")
 
-    # Galgen + Wortanzeige
     cA, cB = st.columns([1, 2])
     with cA:
         st.text(HANGMAN_PICS[min(state["fails"], len(HANGMAN_PICS)-1)])
@@ -319,7 +289,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
         display_word = " ".join([c if (not c.isalpha() or c.lower() in state["guessed"]) else "_" for c in solution])
         st.write("**Word (EN):** " + display_word)
 
-        # Volleingabe als Form -> Enter genügt
         with st.form(key=f"hang_form_{key}"):
             full_guess = st.text_input("Type the full word (English):", key=f"{key}_full")
             submitted = st.form_submit_button("Check (Enter)")
@@ -336,7 +305,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                     st.warning("Not correct.")
                 st.rerun()
 
-    # Buchstaben-Buttons
     if not state["solved"]:
         alphabet = list("abcdefghijklmnopqrstuvwxyz")
         for chunk in [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]:
@@ -349,7 +317,6 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                         else:
                             state["fails"] += 1
                         st.session_state[key] = state
-                        # Erfolg durch Buchstaben?
                         if all((not c.isalpha()) or (c.lower() in state["guessed"]) for c in solution):
                             if t["running"]:
                                 now_ms2 = int(time.time() * 1000)
@@ -371,14 +338,16 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                 st.rerun()
 
 
-# ---------- Wörter ziehen (Drag & Drop) ----------
+# ---------- Wörter ziehen (Drag & Drop + Tap-to-Match für iOS) ----------
 
 def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
     """
-    Drag&Drop-Paare-Spiel (DE ↔ EN) per HTML/JS mit:
+    Tap-to-Match Fallback für iOS (auto), Drag&Drop auf Desktop:
     - Timer (Start/Pause/Reset)
-    - Congratulations + time at the end (English messages)
-    - Show solution als Tabelle (DE — EN) außerhalb des Canvas
+    - Shuffle
+    - Congratulations + Time
+    - „Show solution“ als Tabelle (DE — EN) außerhalb des Canvas
+    - Im Widget: Button zum Umschalten zwischen Drag und Tap
     """
     pairs = [
         {"id": i, "de": r["de"], "en": r["en"]}
@@ -389,10 +358,9 @@ def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
         st.info("No vocabulary.")
         return
 
-    st.write("Drag the matching cards together (DE ↔ EN).")
-    st.caption("Tip: Use 'Shuffle' to restart.")
+    st.write("Match the cards (DE ↔ EN).")
+    st.caption("On iPhone/iPad, tap two cards to match. On desktop, you can drag & drop.")
 
-    # Optional: Lösung als Tabelle (DE — EN)
     if show_solution_table:
         st.subheader("Solution (DE — EN)")
         st.dataframe(pd.DataFrame(pairs)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}), use_container_width=True)
@@ -402,22 +370,39 @@ def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
-:root {{ --primary:#2196F3; --success:#4CAF50; --muted:#666; }}
-body {{ font-family:Arial, sans-serif; margin:0; padding:10px; background:#f6f7fb; }}
+:root {{ --primary:#2196F3; --success:#2e7d32; --muted:#666; --danger:#d32f2f; }}
+* {{ -webkit-tap-highlight-color: transparent; }}
+body {{
+  font-family: Arial, sans-serif; margin:0; padding:10px; background:#f6f7fb;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}}
 #toolbar {{ display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }}
-#timer {{ font-weight:bold; padding:4px 8px; border:1px solid #ccc; border-radius:6px; background:white; min-width:90px; text-align:center; }}
+#timer {{
+  font-weight:bold; padding:4px 8px; border:1px solid #ccc; border-radius:6px;
+  background:white; min-width:90px; text-align:center;
+}}
 .btn {{
   padding:6px 10px; border:1px solid var(--primary); background:white; color:var(--primary);
-  border-radius:8px; cursor:pointer; font-weight:bold;
+  border-radius:8px; cursor:pointer; font-weight:bold; touch-action: manipulation;
 }}
+.toggle {{ border-color:#555; color:#555; }}
 .btn:disabled {{ opacity:0.5; cursor:not-allowed; }}
 .grid {{ display:flex; flex-wrap:wrap; gap:8px; }}
 .card {{
   background:white; border:2px solid var(--primary); border-radius:10px;
-  padding:10px; margin:5px; cursor:grab; user-select:none; min-width:120px;
+  padding:10px; margin:5px; min-width:120px; text-align:center;
+  touch-action: manipulation; cursor:pointer; transition: transform .06s ease;
 }}
+.card:active {{ transform: scale(0.98); }}
 .correct {{ background:#e8f5e9; border-color:var(--success); cursor:default; }}
-#result {{ margin-top:10px; font-weight:bold; color:#2e7d32; }}
+.selected {{ box-shadow:0 0 0 3px rgba(33,150,243,0.35) inset; }}
+.wrong {{ animation: shake .25s linear; border-color: var(--danger)!important; }}
+@keyframes shake {{
+  0%,100% {{ transform: translateX(0); }}
+  25% {{ transform: translateX(-4px); }}
+  75% {{ transform: translateX(4px); }}
+}}
+#result {{ margin-top:10px; font-weight:bold; color:var(--success); }}
 </style>
 </head>
 <body>
@@ -427,39 +412,40 @@ body {{ font-family:Arial, sans-serif; margin:0; padding:10px; background:#f6f7f
   <button class="btn" id="pauseBtn">Pause</button>
   <button class="btn" id="resetBtn">Reset</button>
   <button class="btn" id="shuffleBtn">Shuffle</button>
+  <button class="btn toggle" id="modeBtn">Mode: </button>
 </div>
 
-<div id="box" class="grid"></div>
+<div id="box" class="grid" aria-live="polite"></div>
 <div id="result"></div>
 
 <script>
 const pairs = {pairs_json};
 
+const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// Feature detection: native drag&drop vorhanden?
+const nativeDnD = ('ondragstart' in document.createElement('div')) && !isiOS;
+// Start-Modus: iOS -> Tap, sonst Drag
+let TOUCH_MODE = isiOS ? true : false;
+
+let running = false, timerId = null, startTime = null, elapsed = 0; // ms
+let correctPairs = 0, solved = false;
 let draggedCard = null;
-let running = false;
-let timerId = null;
-let startTime = null;
-let elapsed = 0;   // ms
-let correctPairs = 0;
-let solved = false;
+let selectedCard = null;  // für Tap-Modus
 
 function fmt(ms) {{
   const tenths = Math.floor((ms % 1000) / 100);
   ms = Math.floor(ms / 1000);
   const s = ms % 60;
   const m = Math.floor(ms / 60);
-  const mm = String(m).padStart(2,'0');
-  const ss = String(s).padStart(2,'0');
-  return `${{mm}}:${{ss}}.${{tenths}}`;
+  return String(m).padStart(2,'0') + ":" + String(s).padStart(2,'0') + "." + tenths;
 }}
-
 function updateTimer() {{
   if (!running) return;
   const now = Date.now();
-  const t = now - startTime;
-  document.getElementById('timer').textContent = fmt(t);
+  document.getElementById('timer').textContent = fmt(now - startTime);
 }}
-
 function startTimer() {{
   if (solved) return;
   if (!running) {{
@@ -468,7 +454,6 @@ function startTimer() {{
     running = true;
   }}
 }}
-
 function pauseTimer() {{
   if (running) {{
     clearInterval(timerId);
@@ -476,56 +461,93 @@ function pauseTimer() {{
     running = false;
   }}
 }}
-
 function resetTimer() {{
   clearInterval(timerId);
-  running = false;
-  startTime = null;
-  elapsed = 0;
+  running = false; startTime = null; elapsed = 0;
   document.getElementById('timer').textContent = "00:00.0";
 }}
 
 function clearBoard() {{
   const box = document.getElementById('box');
   box.innerHTML = "";
-  draggedCard = null;
-  correctPairs = 0;
-  solved = false;
+  draggedCard = null; selectedCard = null;
+  correctPairs = 0; solved = false;
   document.getElementById('result').textContent = "";
+}}
+
+function markCorrect(el) {{
+  el.classList.add('correct'); el.setAttribute('aria-disabled','true');
+  el.style.cursor = 'default';
 }}
 
 function createCard(text, pid) {{
   const c = document.createElement('div');
   c.className = 'card';
   c.textContent = text;
-  c.draggable = true;
-  c.dataset.pid = String(pid);
-  c.addEventListener('dragstart', e => {{ draggedCard = c; c.style.opacity='0.5'; }});
-  c.addEventListener('dragend', e => {{ c.style.opacity='1'; }});
-  c.addEventListener('dragover', e => e.preventDefault());
-  c.addEventListener('drop', e => {{
-    e.preventDefault();
-    if(!draggedCard || draggedCard===c || solved) return;
-    const a = draggedCard.dataset.pid, b = c.dataset.pid;
-    if (a === b) {{
-      markCorrect(draggedCard);
-      markCorrect(c);
-      draggedCard = null;
-      correctPairs += 1;
-      checkWin();
-    }} else {{
-      alert('Not a valid pair!');
-      draggedCard.style.opacity='1';
-      draggedCard = null;
-    }}
-  }});
+  c.setAttribute('data-pid', String(pid));
+  c.setAttribute('role', 'button');
+  c.setAttribute('tabindex', '0');
+
+  if (TOUCH_MODE || !nativeDnD) {{
+    // Tap-to-Match
+    c.addEventListener('click', () => handleTap(c));
+    c.addEventListener('keydown', (e) => {{
+      if (e.key === 'Enter' || e.key === ' ') handleTap(c);
+    }});
+  }} else {{
+    // Desktop Drag&Drop
+    c.draggable = true;
+    c.addEventListener('dragstart', () => {{ draggedCard = c; c.style.opacity='0.5'; }});
+    c.addEventListener('dragend', () => {{ c.style.opacity='1'; }});
+    c.addEventListener('dragover', e => e.preventDefault());
+    c.addEventListener('drop', e => {{
+      e.preventDefault();
+      if(!draggedCard || draggedCard===c || solved) return;
+      const a = draggedCard.getAttribute('data-pid');
+      const b = c.getAttribute('data-pid');
+      if (a === b) {{
+        markCorrect(draggedCard); markCorrect(c);
+        draggedCard = null; correctPairs += 1; checkWin();
+      }} else {{
+        shake(draggedCard); shake(c);
+        draggedCard.style.opacity='1'; draggedCard = null;
+      }}
+    }});
+  }}
   return c;
 }}
 
-function markCorrect(el) {{
-  el.classList.add('correct');
-  el.draggable = false;
-  el.style.cursor = 'default';
+function handleTap(card) {{
+  if (solved || card.classList.contains('correct')) return;
+  if (!selectedCard) {{
+    selectedCard = card;
+    card.classList.add('selected');
+    return;
+  }}
+  if (selectedCard === card) {{
+    card.classList.remove('selected');
+    selectedCard = null;
+    return;
+  }}
+  const a = selectedCard.getAttribute('data-pid');
+  const b = card.getAttribute('data-pid');
+  if (a === b) {{
+    markCorrect(selectedCard); markCorrect(card);
+    selectedCard.classList.remove('selected');
+    selectedCard = null;
+    correctPairs += 1; checkWin();
+  }} else {{
+    shake(selectedCard); shake(card);
+    selectedCard.classList.remove('selected');
+    selectedCard = null;
+  }}
+}}
+
+function shake(el) {{
+  el.classList.remove('wrong');
+  void el.offsetWidth; // reflow zum Neustarten der Animation
+  el.classList.add('wrong');
+  setTimeout(() => el.classList.remove('wrong'), 250);
 }}
 
 function shuffleArray(arr) {{
@@ -561,18 +583,30 @@ function checkWin() {{
   }}
 }}
 
+function setModeLabel() {{
+  const b = document.getElementById('modeBtn');
+  b.textContent = "Mode: " + (TOUCH_MODE || !nativeDnD ? "Tap" : "Drag");
+}}
+
 document.getElementById('startBtn').addEventListener('click', () => startTimer());
 document.getElementById('pauseBtn').addEventListener('click', () => pauseTimer());
 document.getElementById('resetBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
 document.getElementById('shuffleBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
+document.getElementById('modeBtn').addEventListener('click', () => {{
+  if (!nativeDnD) return; // auf iOS bleibt Tap
+  TOUCH_MODE = !TOUCH_MODE;
+  setModeLabel();
+  layoutShuffled();
+}});
 
 // Initial
+setModeLabel();
 layoutShuffled();
 </script>
 </body>
 </html>"""
 
-    st.components.v1.html(html, height=580, scrolling=True)
+    st.components.v1.html(html, height=600, scrolling=True)
 
 
 # ---------- Eingabe (DE → EN) ----------
@@ -585,13 +619,11 @@ def _hash_items(items):
 
 def game_input(df_view: pd.DataFrame, classe: str, page: int):
     """
-    Eingabespiel: Deutsch anzeigen, Englisch tippen.
-    - Timer (Start/Pause/Reset) – English end message
-    - **Stabile Items** (werden einmal erzeugt und im State gehalten)
-    - History table (DE, Your answer, EN (correct), Result) live
-    - Show solution shows DE — EN
-    - Enter genügt (Form)
-    - Next word (skip) ohne Bewertung
+    Eingabespiel (DE→EN):
+    - Stabiler Items-Index im State (keine Vertauschungen)
+    - Timer, Enter zum Prüfen
+    - Show solution (DE — EN), Next word (skip)
+    - Live-History mit Result (Correct/Wrong/Skipped)
     """
     items = [
         {"de": r["de"], "en": r["en"]}
@@ -605,27 +637,24 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
     state_key = f"input_state_{classe}_{page}"
     st_state = st.session_state.get(state_key)
 
-    # Initialisieren ODER neu initialisieren, wenn Items gewechselt haben
     items_hash = _hash_items(items)
     if (st_state is None) or (st_state.get("items_hash") != items_hash):
         order = list(range(len(items)))
         random.Random().shuffle(order)
         st_state = {
             "items_hash": items_hash,
-            "items": items,            # stabil gespeichert
-            "order": order,            # gemischte Reihenfolge der Indizes
+            "items": items,
+            "order": order,
             "index": 0,
             "score": 0,
             "total": 0,
-            "history": [],             # list of dicts: {de, en, user, result}
+            "history": [],  # {de, user, en, result}
             "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
         }
         st.session_state[state_key] = st_state
 
-    # Timer-Block
     _timer_block("Input", st_state["timer"], rerun_key=f"{state_key}_timer")
 
-    # Ende?
     i = st_state["index"]
     if i >= len(st_state["order"]):
         t = st_state["timer"]
@@ -635,17 +664,18 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
         if st_state["history"]:
             df_hist = pd.DataFrame(st_state["history"])
             st.subheader("History")
-            st.dataframe(df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}),
-                         use_container_width=True)
+            st.dataframe(
+                df_hist.rename(columns={
+                    "de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"
+                }),
+                use_container_width=True
+            )
         return
 
-    # Aktueller Eintrag (stabil!)
     idx = st_state["order"][i]
     item = st_state["items"][idx]
-
     st.write(f"**German (DE):** {item['de']}")
 
-    # Bedienleiste: Next word (skip) + Show solution (nur Info)
     cskip, csol = st.columns(2)
     with cskip:
         if st.button("Next word (skip)", key=f"{state_key}_skip_{i}"):
@@ -657,7 +687,6 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
         if st.button("Show solution", key=f"{state_key}_showsol_{i}"):
             st.info(f"Solution: {item['de']} — {item['en']}")
 
-    # Eingabe-Form: Enter genügt
     with st.form(key=f"input_form_{state_key}_{i}", clear_on_submit=True):
         user = st.text_input("English (EN):", key=f"user_{state_key}_{i}")
         submitted = st.form_submit_button("Check (Enter)")
@@ -665,19 +694,17 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
     if submitted:
         st_state["total"] += 1
         ok = normalize_text(user) == normalize_text(item["en"])
+        res = "Correct" if ok else "Wrong"
         if ok:
             st_state["score"] += 1
             st.success("Correct!")
-            res = "Correct"
         else:
             st.warning("Wrong.")
-            res = "Wrong"
         st_state["history"].append({"de": item["de"], "user": user, "en": item["en"], "result": res})
         st_state["index"] += 1
         st.session_state[state_key] = st_state
         st.rerun()
 
-    # Live-History (stabil)
     if st_state["history"]:
         df_hist = pd.DataFrame(st_state["history"])
         st.subheader("History (so far)")
@@ -693,7 +720,6 @@ def main():
     st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
     st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
 
-    # Kopfzeile
     c_left, c_mid, c_debug = st.columns([2, 1, 1])
     with c_left:
         st.caption("Quelle: CSVs unter `/data/pages/klasseK/klasseK_pageS.csv`.")
@@ -705,7 +731,6 @@ def main():
 
     DATA_DIR = Path(__file__).parent / "data"
 
-    # CSV-Metadaten lesen (nur seiten-spezifisch)
     file_info_df = get_vocab_file_info(DATA_DIR)
     file_info_df = file_info_df[file_info_df["classe"].isin({"7", "8", "9"})]
     file_info_df = file_info_df[file_info_df["is_page_specific"] == True]
@@ -714,7 +739,6 @@ def main():
         st.warning("Keine seiten-spezifischen CSVs für Klassen 7–9 gefunden.")
         return
 
-    # Auswahl Klasse/Seite
     classe = st.selectbox("Klasse", sorted(file_info_df["classe"].unique(), key=int), index=2)
     pages = sorted(file_info_df[file_info_df["classe"] == classe]["page"].unique(), key=int)
     if not pages:
@@ -723,7 +747,6 @@ def main():
 
     page = st.selectbox("Seite", pages, index=0)
 
-    # Seite laden (nur seiten-spezifische Datei; KEIN Fallback)
     page_specific_paths = file_info_df[
         (file_info_df['classe'] == classe) &
         (file_info_df['page'] == page)
@@ -742,14 +765,12 @@ def main():
 
     st.write(f"**Vokabeln verfügbar:** {len(df_view)}")
 
-    # Debug
     if debug_on:
         with st.expander("Debug-Info"):
             st.write("Datei-Info (erste 50):", file_info_df.head(50))
             st.write("Beispiel-Daten (erste 20):", df_view.head(20))
             st.write("Seitenverteilung:", df_view["page"].value_counts().head(10))
 
-    # Filter: Nur Einzelwörter
     st.subheader("Filter: Nur Einzelwörter")
     col1, col2, col3 = st.columns([1.5, 1, 1])
     with col1:
