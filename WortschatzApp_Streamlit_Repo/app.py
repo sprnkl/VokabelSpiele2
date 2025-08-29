@@ -7,9 +7,8 @@ Spalten: classe, page, de, en
 Spiele/Features:
 - Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
   Next word (Sequenz) & New word (Skip).
-- Wörter ziehen: Timer, Congrats+Time, Show solution als Tabelle (DE — EN),
-  Drag&Drop (Desktop inkl. Safari/macOS) mit dataTransfer.setData,
-  Auto-Tap-Modus (iOS), Mode-Schalter im Spiel.
+- Wörtermemory (vormals „Wörter ziehen“): Standard = Click/Tap-to-Match (alle Plattformen),
+  optional Desktop-Drag-Modus zuschaltbar; Timer; „Show solution“ als Tabelle (DE — EN).
 - Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution (DE — EN),
   Next word (Skip), stabiler Items-Index (kein Vertauschen).
 """
@@ -334,13 +333,12 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                 st.rerun()
 
 
-# ---------- Wörter ziehen (Drag & Drop + Tap-to-Match) ----------
+# ---------- Wörtermemory (Click/Tap-to-Match; optional Drag) ----------
 
-def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
+def game_word_memory(df_view: pd.DataFrame, show_solution_table: bool):
     """
-    Desktop (inkl. Safari/macOS): HTML5-Drag mit dataTransfer.setData
-    iOS (iPhone/iPad): Tap-to-Match (Drag nicht zuverlässig verfügbar)
-    Umschaltbar im Spiel (auf iOS bleibt Tap erzwungen)
+    Standard = Click/Tap-to-Match (alle Plattformen).
+    Optional: Drag-Modus auf Desktop zuschaltbar.
     """
     pairs = [
         {"id": i, "de": r["de"], "en": r["en"]}
@@ -351,9 +349,7 @@ def game_drag_pairs(df_view: pd.DataFrame, show_solution_table: bool):
         st.info("No vocabulary.")
         return
 
-    st.write("Match the cards (DE ↔ EN).")
-    st.caption("On iPhone/iPad, drag is limited by Safari – tap two cards to match instead.")
-
+    st.write("Klicke zwei Karten, die zusammengehören (DE ↔ EN). Optional: Drag-Modus auf Desktop.")
     if show_solution_table:
         st.subheader("Solution (DE — EN)")
         st.dataframe(pd.DataFrame(pairs)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}), use_container_width=True)
@@ -415,19 +411,16 @@ body {{
 <script>
 const pairs = {pairs_json};
 
-const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-// Feature detection: native drag&drop vorhanden?
+// Desktop-DnD verfügbar?
 const nativeDnD = ('ondragstart' in document.createElement('div'));
 
-// Startmodus: iOS -> Tap, sonst Drag
-let TOUCH_MODE = isiOS ? true : false;
+// Standard: immer Tap/Click (benutzerfreundlich überall)
+let TAP_MODE = true;
 
 let running = false, timerId = null, startTime = null, elapsed = 0; // ms
 let correctPairs = 0, solved = false;
-let draggedCard = null;       // für native DnD (Desktop)
-let selectedCard = null;      // für Tap-to-Match
+let draggedCard = null;       // für DnD
+let selectedCard = null;      // für Tap
 
 function fmt(ms) {{
   const tenths = Math.floor((ms % 1000) / 100);
@@ -483,20 +476,19 @@ function createCard(text, pid) {{
   c.setAttribute('role', 'button');
   c.setAttribute('tabindex', '0');
 
-  if (TOUCH_MODE || !nativeDnD) {{
-    // Tap-to-Match
+  if (TAP_MODE || !nativeDnD) {{
+    // Tap/Click-to-Match
     c.addEventListener('click', () => handleTap(c));
     c.addEventListener('keydown', (e) => {{
       if (e.key === 'Enter' || e.key === ' ') handleTap(c);
     }});
   }} else {{
-    // Native HTML5 Drag&Drop (Desktop + Safari/macOS)
+    // Optionaler Desktop-Drag-Modus
     c.draggable = true;
     c.addEventListener('dragstart', (e) => {{
       draggedCard = c;
       c.style.opacity = '0.5';
       try {{
-        // Safari/macOS benötigt setData, sonst wird kein 'drop' ausgelöst
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', c.getAttribute('data-pid'));
       }} catch(_e) {{}}
@@ -604,10 +596,7 @@ function checkWin() {{
 
 function setModeLabel() {{
   const b = document.getElementById('modeBtn');
-  b.textContent = "Mode: " + (TOUCH_MODE || !nativeDnD ? "Tap" : "Drag");
-  if (isiOS) {{
-    b.disabled = true; b.title = "Tap mode is enforced on iOS Safari";
-  }}
+  b.textContent = "Mode: " + (TAP_MODE || !nativeDnD ? "Tap" : "Drag");
 }}
 
 document.getElementById('startBtn').addEventListener('click', () => startTimer());
@@ -615,8 +604,8 @@ document.getElementById('pauseBtn').addEventListener('click', () => pauseTimer()
 document.getElementById('resetBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
 document.getElementById('shuffleBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
 document.getElementById('modeBtn').addEventListener('click', () => {{
-  if (isiOS) return; // auf iOS bleibt Tap
-  TOUCH_MODE = !TOUCH_MODE;
+  if (!nativeDnD) return; // wenn kein DnD, bleibt Tap
+  TAP_MODE = !TAP_MODE;
   setModeLabel();
   layoutShuffled();
 }});
@@ -740,7 +729,7 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
 
 def main():
     st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
-    st.title("Wortschatz-Spiele (Klassen 7–9) Grundkurs")
+    st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
 
     c_left, c_mid, c_debug = st.columns([2, 1, 1])
     with c_left:
@@ -814,13 +803,13 @@ def main():
             return
 
     seed_val = st.text_input("Seed (optional – gleiche Reihenfolge für alle)", value="")
-    game = st.selectbox("Wähle ein Spiel", ("Hangman", "Wörter ziehen", "Eingabe (DE → EN)"))
+    game = st.selectbox("Wähle ein Spiel", ("Hangman", "Wörtermemory", "Eingabe (DE → EN)"))
 
     if game == "Hangman":
         game_hangman(df_view, classe, page, seed_val)
-    elif game == "Wörter ziehen":
+    elif game == "Wörtermemory":
         show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
-        game_drag_pairs(df_view, show_solution_table=show_solution_table)
+        game_word_memory(df_view, show_solution_table=show_solution_table)
     else:
         game_input(df_view, classe, page)
 
