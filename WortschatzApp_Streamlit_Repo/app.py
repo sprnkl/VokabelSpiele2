@@ -12,7 +12,7 @@ Spiele/Features:
   Timer, Show solution (DE—EN), Anzahl der Paare wählbar (ganze Seite ODER k-Paare), Seed-stabil.
 - Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution, Next word (Skip),
   stabiler Items-Index (kein Vertauschen).
-- Unregelmäßige Verbenmemory (aus Code): Tap-to-Match von 4 Feldern
+- Unregelmäßige Verben Memory (aus Code): Tap-to-Match von 4 Feldern
   (Infinitive–Past Simple–Past Participle–Deutsch), tolerant bei Slash-Formen.
 """
 
@@ -718,7 +718,7 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
         st.subheader("History (so far)")
         st.dataframe(df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}).tail(10), use_container_width=True)
 
-# ---------- Unregelmäßige Verbenmemory (aus Code) ----------
+# ---------- Unregelmäßige Verben Memory (aus Code) ----------
 def game_irregulars_assign():
     def _norm(s: str) -> str:
         return s.strip().lower()
@@ -755,7 +755,7 @@ def game_irregulars_assign():
     if "verbs_selected_idx" not in st.session_state:
         st.session_state.verbs_selected_idx = None
 
-    st.subheader("Unregelmäßige Verbenmemory (Tippen statt Ziehen)")
+    st.subheader("Unregelmäßige Verben Memory (Tippen statt Ziehen)")
     st.caption("Links ein **Wort** wählen, rechts das **Ziel** tippen. Slash-Formen (z. B. was/were) werden akzeptiert.")
 
     c1, c2, c3 = st.columns(3)
@@ -907,7 +907,7 @@ def main():
         "Hangman",
         "Wörtermemory",
         "Eingabe (DE → EN)",
-        "Unregelmäßige Verbenmemory",
+        "Unregelmäßige Verben Memory",
     ))
     # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
@@ -963,7 +963,7 @@ def main():
         else:
             game_input(df_view, classe, page)
 
-    else:  # Unregelmäßige Verbenmemory
+    else:  # Unregelmäßige Verben Memory
         game_irregulars_assign()
 
     st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Geladene Vokabeln (Seite): {len(df_view)}")
