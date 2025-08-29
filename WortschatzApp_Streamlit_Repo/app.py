@@ -7,11 +7,12 @@ Spalten: classe, page, de, en
 Spiele/Features:
 - Hangman: Timer, Congrats+Time, Show solution, Show German hint (optional),
   Next word (Sequenz) & New word (Skip).
-- Wörtermemory (vormals „Wörter ziehen“): Standard = Click/Tap-to-Match (alle Plattformen),
-  optional Desktop-Drag-Modus zuschaltbar; Timer; „Show solution“ als Tabelle (DE — EN);
-  **neue Option: Anzahl der Paare (ganze Seite ODER konkrete Anzahl)**; Subset bleibt stabil.
-- Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution (DE — EN),
+- Wörtermemory (DE↔EN): Click/Tap-to-Match (alle Plattformen), optional Desktop-Drag,
+  Timer, Show solution (DE—EN), Anzahl der Paare wählbar (ganze Seite ODER k-Paare), Seed-stabil.
+- Eingabe (DE→EN): Enter zum Prüfen, History-Tabelle live, Show solution (DE—EN),
   Next word (Skip), stabiler Items-Index (kein Vertauschen).
+- Unregelmäßige Verben – Zuordnen (aus Code): Tap-to-Match von 4 Feldern
+  (Infinitive–Past Simple–Past Participle–Deutsch), tolerant bei Slash-Formen.
 """
 
 import re
@@ -26,6 +27,71 @@ import hashlib
 import pandas as pd
 import streamlit as st
 
+# ============================ UNREGELMÄSSIGE VERBEN – DIREKT IM CODE ============================
+VERBS = [
+    {"infinitive": "be", "pastSimple": "was/were", "pastParticiple": "been", "meaning": "sein"},
+    {"infinitive": "begin", "pastSimple": "began", "pastParticiple": "begun", "meaning": "beginnen, anfangen"},
+    {"infinitive": "break", "pastSimple": "broke", "pastParticiple": "broken", "meaning": "brechen, zerbrechen"},
+    {"infinitive": "bring", "pastSimple": "brought", "pastParticiple": "brought", "meaning": "bringen, mitbringen"},
+    {"infinitive": "buy", "pastSimple": "bought", "pastParticiple": "bought", "meaning": "kaufen"},
+    {"infinitive": "catch", "pastSimple": "caught", "pastParticiple": "caught", "meaning": "fangen, erwischen"},
+    {"infinitive": "come", "pastSimple": "came", "pastParticiple": "come", "meaning": "kommen"},
+    {"infinitive": "cost", "pastSimple": "cost", "pastParticiple": "cost", "meaning": "kosten"},
+    {"infinitive": "cut", "pastSimple": "cut", "pastParticiple": "cut", "meaning": "schneiden, mähen"},
+    {"infinitive": "do", "pastSimple": "did", "pastParticiple": "done", "meaning": "tun, machen"},
+    {"infinitive": "drink", "pastSimple": "drank", "pastParticiple": "drunk", "meaning": "trinken"},
+    {"infinitive": "drive", "pastSimple": "drove", "pastParticiple": "driven", "meaning": "(Auto) fahren, antreiben"},
+    {"infinitive": "eat", "pastSimple": "ate", "pastParticiple": "eaten", "meaning": "essen"},
+    {"infinitive": "fall", "pastSimple": "fell", "pastParticiple": "fallen", "meaning": "fallen, hinfallen"},
+    {"infinitive": "feel", "pastSimple": "felt", "pastParticiple": "felt", "meaning": "fühlen"},
+    {"infinitive": "find", "pastSimple": "found", "pastParticiple": "found", "meaning": "finden"},
+    {"infinitive": "fly", "pastSimple": "flew", "pastParticiple": "flown", "meaning": "fliegen"},
+    {"infinitive": "forget", "pastSimple": "forgot", "pastParticiple": "forgotten", "meaning": "vergessen"},
+    {"infinitive": "get", "pastSimple": "got", "pastParticiple": "got/gotten", "meaning": "bekommen, holen"},
+    {"infinitive": "give", "pastSimple": "gave", "pastParticiple": "given", "meaning": "geben"},
+    {"infinitive": "go", "pastSimple": "went", "pastParticiple": "gone", "meaning": "gehen"},
+    {"infinitive": "have", "pastSimple": "had", "pastParticiple": "had", "meaning": "haben"},
+    {"infinitive": "hear", "pastSimple": "heard", "pastParticiple": "heard", "meaning": "hören"},
+    {"infinitive": "hurt", "pastSimple": "hurt", "pastParticiple": "hurt", "meaning": "verletzen, wehtun"},
+    {"infinitive": "keep", "pastSimple": "kept", "pastParticiple": "kept", "meaning": "behalten"},
+    {"infinitive": "know", "pastSimple": "knew", "pastParticiple": "known", "meaning": "wissen, kennen"},
+    {"infinitive": "leave", "pastSimple": "left", "pastParticiple": "left", "meaning": "abfahren, weggehen"},
+    {"infinitive": "lose", "pastSimple": "lost", "pastParticiple": "lost", "meaning": "verlieren"},
+    {"infinitive": "make", "pastSimple": "made", "pastParticiple": "made", "meaning": "machen"},
+    {"infinitive": "mean", "pastSimple": "meant", "pastParticiple": "meant", "meaning": "bedeuten, meinen"},
+    {"infinitive": "meet", "pastSimple": "met", "pastParticiple": "met", "meaning": "treffen, kennenlernen"},
+    {"infinitive": "pay", "pastSimple": "paid", "pastParticiple": "paid", "meaning": "bezahlen"},
+    {"infinitive": "put", "pastSimple": "put", "pastParticiple": "put", "meaning": "setzen, legen"},
+    {"infinitive": "read", "pastSimple": "read", "pastParticiple": "read", "meaning": "lesen"},
+    {"infinitive": "ride", "pastSimple": "rode", "pastParticiple": "ridden", "meaning": "reiten, fahren"},
+    {"infinitive": "ring", "pastSimple": "rang", "pastParticiple": "rung", "meaning": "läuten, anrufen"},
+    {"infinitive": "run", "pastSimple": "ran", "pastParticiple": "run", "meaning": "rennen, laufen"},
+    {"infinitive": "say", "pastSimple": "said", "pastParticiple": "said", "meaning": "sagen"},
+    {"infinitive": "see", "pastSimple": "saw", "pastParticiple": "seen", "meaning": "sehen"},
+    {"infinitive": "sell", "pastSimple": "sold", "pastParticiple": "sold", "meaning": "verkaufen"},
+    {"infinitive": "send", "pastSimple": "sent", "pastParticiple": "sent", "meaning": "schicken"},
+    {"infinitive": "sing", "pastSimple": "sang", "pastParticiple": "sung", "meaning": "singen"},
+    {"infinitive": "sit", "pastSimple": "sat", "pastParticiple": "sat", "meaning": "sitzen"},
+    {"infinitive": "sleep", "pastSimple": "slept", "pastParticiple": "slept", "meaning": "schlafen"},
+    {"infinitive": "speak", "pastSimple": "spoke", "pastParticiple": "spoken", "meaning": "sprechen"},
+    {"infinitive": "spend", "pastSimple": "spent", "pastParticiple": "spent", "meaning": "ausgeben, verbringen"},
+    {"infinitive": "stand", "pastSimple": "stood", "pastParticiple": "stood", "meaning": "stehen"},
+    {"infinitive": "take", "pastSimple": "took", "pastParticiple": "taken", "meaning": "nehmen"},
+    {"infinitive": "teach", "pastSimple": "taught", "pastParticiple": "taught", "meaning": "unterrichten"},
+    {"infinitive": "tell", "pastSimple": "told", "pastParticiple": "told", "meaning": "erzählen"},
+    {"infinitive": "think", "pastSimple": "thought", "pastParticiple": "thought", "meaning": "denken"},
+    {"infinitive": "throw", "pastSimple": "threw", "pastParticiple": "thrown", "meaning": "werfen"},
+    {"infinitive": "understand", "pastSimple": "understood", "pastParticiple": "understood", "meaning": "verstehen"},
+    {"infinitive": "wear", "pastSimple": "wore", "pastParticiple": "worn", "meaning": "tragen, anhaben"},
+    {"infinitive": "win", "pastSimple": "won", "pastParticiple": "won", "meaning": "gewinnen"},
+    {"infinitive": "write", "pastSimple": "wrote", "pastParticiple": "written", "meaning": "schreiben"},
+]
+VERB_TARGETS = [
+    ("Infinitive", "infinitive"),
+    ("Past Simple", "pastSimple"),
+    ("Past Participle", "pastParticiple"),
+    ("Meaning (Deutsch)", "meaning"),
+]
 
 # ============================ Utilities ============================
 
@@ -34,10 +100,9 @@ def normalize_text(s: str) -> str:
         return ""
     s = s.strip().lower()
     s = unicodedata.normalize("NFKD", s)
-    s = re.sub(r"[^\w\s-]", "", s)
+    s = re.sub(r"[^\w\s/-]", "", s)  # /- für "was/were"
     s = re.sub(r"\s+", " ", s)
     return s
-
 
 def is_simple_word(
     word: str,
@@ -59,7 +124,6 @@ def is_simple_word(
         return False
     return len(w) >= min_length
 
-
 def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFrame:
     if df is None or df.empty:
         return df
@@ -77,7 +141,6 @@ def _filter_by_page_rows(df: pd.DataFrame, classe: int, page: int) -> pd.DataFra
     except Exception:
         return df
 
-
 def fmt_ms(ms: int) -> str:
     if ms < 0:
         ms = 0
@@ -85,7 +148,6 @@ def fmt_ms(ms: int) -> str:
     s = (ms // 1000) % 60
     m = (ms // 1000) // 60
     return f"{m:02d}:{s:02d}.{tenths}"
-
 
 # ============================ Hangman Art ============================
 
@@ -99,7 +161,6 @@ HANGMAN_PICS = [
     " +---+\n O   |\n/|\\  |\n/ \\  |\n    ===",
 ]
 
-
 # ============================ CSV-Erkennung & Laden ============================
 
 @st.cache_data(show_spinner=False)
@@ -107,7 +168,6 @@ def get_vocab_file_info(data_dir: Path) -> pd.DataFrame:
     file_info = []
     base = Path(data_dir)
     page_pattern = re.compile(r"/data/pages/klasse(\d+)/klasse\1_page(\d+)\.csv$", re.IGNORECASE)
-
     for path in base.glob("**/*.csv"):
         sp = str(path).replace("\\", "/")
         m = page_pattern.search(sp.lower())
@@ -120,13 +180,10 @@ def get_vocab_file_info(data_dir: Path) -> pd.DataFrame:
                     "path": path,
                     "is_page_specific": True,
                 })
-
     if not file_info:
         return pd.DataFrame(columns=["classe", "page", "path", "is_page_specific"])
-
     df = pd.DataFrame(file_info).sort_values(["classe", "page"]).reset_index(drop=True)
     return df
-
 
 @st.cache_data(show_spinner=False)
 def load_and_preprocess_df(path: Path) -> pd.DataFrame:
@@ -135,7 +192,6 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
     except Exception as e:
         st.warning(f"CSV-Fehler {path.name}: {e}")
         return pd.DataFrame()
-
     col_map = {}
     for c in df.columns:
         lc = str(c).strip().lower()
@@ -147,25 +203,21 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
             col_map[c] = "de"
         elif lc in {"en", "englisch", "english", "translation", "vokabel_en"}:
             col_map[c] = "en"
-
     df = df.rename(columns=col_map)
     for req in ["classe", "page", "de", "en"]:
         if req not in df.columns:
             df[req] = None
-
     df = df[["classe", "page", "de", "en"]].copy()
     df["de"] = df["de"].astype(str).str.strip()
     df["en"] = df["en"].astype(str).str.strip()
     df = df.dropna(how="all", subset=["de", "en"])
     return df
 
-
 # ============================ Timer-UI ============================
 
 def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
     now_ms = int(time.time() * 1000)
     current_ms = timer["elapsed_ms"] + (now_ms - timer["started_ms"] if timer["running"] else 0)
-
     colT1, colT2, colT3, colT4 = st.columns([1.2, 1, 1, 1])
     with colT1:
         st.metric(f"{label_prefix} Time", fmt_ms(current_ms))
@@ -191,6 +243,40 @@ def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
                 extra_reset()
             st.rerun()
 
+# ============================ Hash/Subset Utils ============================
+
+def _hash_dict_list(items, keys) -> str:
+    m = hashlib.sha256()
+    for it in items:
+        vals = [str(it.get(k,"")) for k in keys]
+        m.update(("||".join(vals)).encode("utf-8"))
+    return m.hexdigest()
+
+def _sample_subset(items, mode, k, seed_val, state_key, hash_keys):
+    base_hash = _hash_dict_list(items, hash_keys)
+    st_state = st.session_state.get(state_key)
+    need_new = (
+        st_state is None or
+        st_state.get("base_hash") != base_hash or
+        st_state.get("mode") != mode or
+        (mode == "k" and st_state.get("k") != int(k))
+    )
+    if not need_new:
+        return st_state["subset"]
+    if mode == "all" or int(k) >= len(items):
+        subset = list(items)
+    else:
+        order = list(range(len(items)))
+        rnd = random.Random(seed_val) if seed_val else random.Random()
+        rnd.shuffle(order)
+        subset = [items[i] for i in order[:max(1, int(k))]]
+    st.session_state[state_key] = {
+        "base_hash": base_hash,
+        "mode": mode,
+        "k": int(k),
+        "subset": subset,
+    }
+    return subset
 
 # ============================ Spiele ============================
 
@@ -199,12 +285,10 @@ def _timer_block(label_prefix, timer, rerun_key, extra_reset=None):
 def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
     key = f"hangman_{classe}_{page}"
     state = st.session_state.get(key)
-
     rows = df_view.to_dict("records")
     if not rows:
         st.info("No vocabulary available.")
         return
-
     if state is None:
         order = list(range(len(rows)))
         rnd = random.Random(seed_val) if seed_val else random.Random()
@@ -223,12 +307,9 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
             "show_hint": False,
         }
         st.session_state[key] = state
-
     def next_word():
         t = state["timer"]
-        t["running"] = False
-        t["started_ms"] = 0
-        t["elapsed_ms"] = 0
+        t["running"] = False; t["started_ms"] = 0; t["elapsed_ms"] = 0
         state["idx"] += 1
         if state["idx"] >= len(rows):
             order = list(range(len(rows)))
@@ -237,32 +318,20 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
             state["order"] = order
             state["idx"] = 0
         i = state["order"][state["idx"]]
-        state["solution"] = rows[i]["en"]
-        state["hint"] = rows[i]["de"]
-        state["guessed"] = set()
-        state["fails"] = 0
-        state["solved"] = False
+        state["solution"] = rows[i]["en"]; state["hint"] = rows[i]["de"]
+        state["guessed"] = set(); state["fails"] = 0; state["solved"] = False
         st.session_state[key] = state
-
     def new_word():
         t = state["timer"]
-        t["running"] = False
-        t["started_ms"] = 0
-        t["elapsed_ms"] = 0
+        t["running"] = False; t["started_ms"] = 0; t["elapsed_ms"] = 0
         rnd = random.Random(time.time())
         i = rnd.randrange(len(rows))
-        state["solution"] = rows[i]["en"]
-        state["hint"] = rows[i]["de"]
-        state["guessed"] = set()
-        state["fails"] = 0
-        state["solved"] = False
+        state["solution"] = rows[i]["en"]; state["hint"] = rows[i]["de"]
+        state["guessed"] = set(); state["fails"] = 0; state["solved"] = False
         st.session_state[key] = state
-
     solution, hint = state["solution"], state["hint"]
     t = state["timer"]
-
     _timer_block("Hangman", t, rerun_key=f"{key}_timer")
-
     opt1, opt2, opt3 = st.columns(3)
     with opt1:
         state["show_hint"] = st.checkbox("Show German hint", value=state.get("show_hint", False), key=f"{key}_showhint")
@@ -272,19 +341,15 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
             st.info(f"Solution: {solution}")
     with opt3:
         if st.button("New word (skip)", key=f"{key}_newword"):
-            new_word()
-            st.rerun()
-
+            new_word(); st.rerun()
     if state["show_hint"]:
         st.write(f"**German (hint):** {hint}")
-
     cA, cB = st.columns([1, 2])
     with cA:
         st.text(HANGMAN_PICS[min(state["fails"], len(HANGMAN_PICS)-1)])
     with cB:
         display_word = " ".join([c if (not c.isalpha() or c.lower() in state["guessed"]) else "_" for c in solution])
         st.write("**Word (EN):** " + display_word)
-
         with st.form(key=f"hang_form_{key}"):
             full_guess = st.text_input("Type the full word (English):", key=f"{key}_full")
             submitted = st.form_submit_button("Check (Enter)")
@@ -292,15 +357,12 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                 if normalize_text(full_guess) == normalize_text(solution):
                     if t["running"]:
                         now_ms2 = int(time.time() * 1000)
-                        t["elapsed_ms"] = now_ms2 - t["started_ms"]
-                        t["running"] = False
-                    state["solved"] = True
-                    st.session_state[key] = state
+                        t["elapsed_ms"] = now_ms2 - t["started_ms"]; t["running"] = False
+                    state["solved"] = True; st.session_state[key] = state
                     st.success(f"Congratulations! You solved it. Time: {fmt_ms(t['elapsed_ms'])}")
                 else:
                     st.warning("Not correct.")
                 st.rerun()
-
     if not state["solved"]:
         alphabet = list("abcdefghijklmnopqrstuvwxyz")
         for chunk in [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]:
@@ -316,78 +378,23 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                         if all((not c.isalpha()) or (c.lower() in state["guessed"]) for c in solution):
                             if t["running"]:
                                 now_ms2 = int(time.time() * 1000)
-                                t["elapsed_ms"] = now_ms2 - t["started_ms"]
-                                t["running"] = False
-                            state["solved"] = True
-                            st.session_state[key] = state
+                                t["elapsed_ms"] = now_ms2 - t["started_ms"]; t["running"] = False
+                            state["solved"] = True; st.session_state[key] = state
                             st.success(f"Congratulations! You solved it. Time: {fmt_ms(t['elapsed_ms'])}")
                         st.rerun()
     else:
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Next word", key=f"{key}_nextword"):
-                next_word()
-                st.rerun()
+                next_word(); st.rerun()
         with c2:
             if st.button("New word", key=f"{key}_newword2"):
-                new_word()
-                st.rerun()
+                new_word(); st.rerun()
 
-
-# ---------- Wörtermemory (Click/Tap-to-Match; optional Drag) ----------
-
-def _hash_items(items):
-    m = hashlib.sha256()
-    for it in items:
-        m.update((str(it.get("de","")) + "||" + str(it.get("en",""))).encode("utf-8"))
-    return m.hexdigest()
-
-def _sample_subset(items, mode, k, seed_val, state_key):
-    """
-    items: Liste von {de,en}
-    mode: 'all' oder 'k'
-    k: gewünschte Anzahl (nur bei mode 'k')
-    seed_val: Seed-String oder ''
-    state_key: key für st.session_state (Subset stabil halten)
-    """
-    base_hash = _hash_items(items)
-    st_state = st.session_state.get(state_key)
-
-    # Soll neu gesampelt werden?
-    need_new = (
-        st_state is None or
-        st_state.get("base_hash") != base_hash or
-        st_state.get("mode") != mode or
-        (mode == "k" and st_state.get("k") != k)
-    )
-
-    if not need_new:
-        return st_state["subset"]
-
-    if mode == "all" or k >= len(items):
-        subset = list(items)
-    else:
-        order = list(range(len(items)))
-        rnd = random.Random(seed_val) if seed_val else random.Random()
-        rnd.shuffle(order)
-        subset = [items[i] for i in order[:max(1, int(k))]]
-
-    st.session_state[state_key] = {
-        "base_hash": base_hash,
-        "mode": mode,
-        "k": int(k),
-        "subset": subset,
-    }
-    return subset
-
+# ---------- Wörtermemory (DE↔EN; Click/Tap; optional Drag) ----------
 
 def game_word_memory(df_view: pd.DataFrame, classe: str, page: int,
                      show_solution_table: bool, subset_mode: str, subset_k: int, seed_val: str):
-    """
-    Standard = Click/Tap-to-Match (alle Plattformen).
-    Optional: Drag-Modus auf Desktop zuschaltbar.
-    Subset: ganze Seite oder k-Paare (stabil pro Auswahl).
-    """
     base_items = [
         {"de": r["de"], "en": r["en"]}
         for r in df_view.to_dict("records")
@@ -396,22 +403,17 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page: int,
     if not base_items:
         st.info("No vocabulary.")
         return
-
     subset_state_key = f"memory_subset_{classe}_{page}"
-    items = _sample_subset(base_items, subset_mode, subset_k, seed_val, subset_state_key)
-
+    items = _sample_subset(base_items, subset_mode, subset_k, seed_val, subset_state_key, ["de","en"])
     st.write(f"Pairs in this round: **{len(items)}**")
     st.caption("Klicke zwei Karten, die zusammengehören (DE ↔ EN). Optional: Drag-Modus auf Desktop.")
-
     if show_solution_table:
         st.subheader("Solution (DE — EN)")
         st.dataframe(pd.DataFrame(items)[["de", "en"]].rename(columns={"de": "DE", "en": "EN"}), use_container_width=True)
-
     pairs_json = json.dumps(
         [{"id": i, "de": it["de"], "en": it["en"]} for i, it in enumerate(items)],
         ensure_ascii=False
     )
-
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
@@ -466,17 +468,13 @@ body {{
 
 <script>
 const pairs = {pairs_json};
-
-// Desktop-DnD verfügbar?
 const nativeDnD = ('ondragstart' in document.createElement('div'));
-
-// Standard: Tap/Click
 let TAP_MODE = true;
 
-let running = false, timerId = null, startTime = null, elapsed = 0; // ms
+let running = false, timerId = null, startTime = null, elapsed = 0;
 let correctPairs = 0, solved = false;
-let draggedCard = null;       // für optionales DnD
-let selectedCard = null;      // für Tap
+let draggedCard = null;
+let selectedCard = null;
 
 function fmt(ms) {{
   const tenths = Math.floor((ms % 1000) / 100);
@@ -485,44 +483,13 @@ function fmt(ms) {{
   const m = Math.floor(ms / 60);
   return String(m).padStart(2,'0') + ":" + String(s).padStart(2,'0') + "." + tenths;
 }}
-function updateTimer() {{
-  if (!running) return;
-  const now = Date.now();
-  document.getElementById('timer').textContent = fmt(now - startTime);
-}}
-function startTimer() {{
-  if (solved) return;
-  if (!running) {{
-    startTime = Date.now() - elapsed;
-    timerId = setInterval(updateTimer, 100);
-    running = true;
-  }}
-}}
-function pauseTimer() {{
-  if (running) {{
-    clearInterval(timerId);
-    elapsed = Date.now() - startTime;
-    running = false;
-  }}
-}}
-function resetTimer() {{
-  clearInterval(timerId);
-  running = false; startTime = null; elapsed = 0;
-  document.getElementById('timer').textContent = "00:00.0";
-}}
+function updateTimer() {{ if (!running) return; const now = Date.now(); document.getElementById('timer').textContent = fmt(now - startTime); }}
+function startTimer() {{ if (solved) return; if (!running) {{ startTime = Date.now() - elapsed; timerId = setInterval(updateTimer, 100); running = true; }} }}
+function pauseTimer() {{ if (running) {{ clearInterval(timerId); elapsed = Date.now() - startTime; running = false; }} }}
+function resetTimer() {{ clearInterval(timerId); running = false; startTime = null; elapsed = 0; document.getElementById('timer').textContent = "00:00.0"; }}
 
-function clearBoard() {{
-  const box = document.getElementById('box');
-  box.innerHTML = "";
-  draggedCard = null; selectedCard = null;
-  correctPairs = 0; solved = false;
-  document.getElementById('result').textContent = "";
-}}
-
-function markCorrect(el) {{
-  el.classList.add('correct'); el.setAttribute('aria-disabled','true');
-  el.style.cursor = 'default';
-}}
+function clearBoard() {{ const box = document.getElementById('box'); box.innerHTML = ""; draggedCard = null; selectedCard = null; correctPairs = 0; solved = false; document.getElementById('result').textContent = ""; }}
+function markCorrect(el) {{ el.classList.add('correct'); el.setAttribute('aria-disabled','true'); el.style.cursor = 'default'; }}
 
 function createCard(text, pid) {{
   const c = document.createElement('div');
@@ -531,54 +498,21 @@ function createCard(text, pid) {{
   c.setAttribute('data-pid', String(pid));
   c.setAttribute('role', 'button');
   c.setAttribute('tabindex', '0');
-
   if (TAP_MODE || !nativeDnD) {{
-    // Tap/Click-to-Match
     c.addEventListener('click', () => handleTap(c));
-    c.addEventListener('keydown', (e) => {{
-      if (e.key === 'Enter' || e.key === ' ') handleTap(c);
-    }});
+    c.addEventListener('keydown', (e) => {{ if (e.key === 'Enter' || e.key === ' ') handleTap(c); }});
   }} else {{
-    // Optionaler Desktop-Drag-Modus
     c.draggable = true;
-    c.addEventListener('dragstart', (e) => {{
-      draggedCard = c;
-      c.style.opacity = '0.5';
-      try {{
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', c.getAttribute('data-pid'));
-      }} catch(_e) {{}}
-    }});
-    c.addEventListener('dragend', () => {{
-      c.style.opacity = '1';
-    }});
-    c.addEventListener('dragover', (e) => {{
-      e.preventDefault();
-      try {{ e.dataTransfer.dropEffect = 'move'; }} catch(_e) {{}}
-    }});
+    c.addEventListener('dragstart', (e) => {{ draggedCard = c; c.style.opacity = '0.5'; try {{ e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', c.getAttribute('data-pid')); }} catch(_e) {{}} }});
+    c.addEventListener('dragend', () => {{ c.style.opacity = '1'; }});
+    c.addEventListener('dragover', (e) => {{ e.preventDefault(); try {{ e.dataTransfer.dropEffect = 'move'; }} catch(_e) {{}} }});
     c.addEventListener('drop', (e) => {{
-      e.preventDefault();
-      if (solved) return;
-      let srcPid = null;
-      try {{ srcPid = e.dataTransfer.getData('text/plain'); }} catch(_e) {{}}
-      if (!srcPid && draggedCard) {{
-        srcPid = draggedCard.getAttribute('data-pid');
-      }}
-      const tgtPid = c.getAttribute('data-pid');
-      if (!srcPid) return;
-
-      if (srcPid === tgtPid) {{
-        if (draggedCard) markCorrect(draggedCard);
-        markCorrect(c);
-        draggedCard = null;
-        correctPairs += 1;
-        checkWin();
-      }} else {{
-        if (draggedCard) shake(draggedCard);
-        shake(c);
-        if (draggedCard) draggedCard.style.opacity = '1';
-        draggedCard = null;
-      }}
+      e.preventDefault(); if (solved) return;
+      let srcPid = null; try {{ srcPid = e.dataTransfer.getData('text/plain'); }} catch(_e) {{}}
+      if (!srcPid && draggedCard) {{ srcPid = draggedCard.getAttribute('data-pid'); }}
+      const tgtPid = c.getAttribute('data-pid'); if (!srcPid) return;
+      if (srcPid === tgtPid) {{ if (draggedCard) markCorrect(draggedCard); markCorrect(c); draggedCard = null; correctPairs += 1; checkWin(); }}
+      else {{ if (draggedCard) shake(draggedCard); shake(c); if (draggedCard) draggedCard.style.opacity = '1'; draggedCard = null; }}
     }});
   }}
   return c;
@@ -586,106 +520,33 @@ function createCard(text, pid) {{
 
 function handleTap(card) {{
   if (solved || card.classList.contains('correct')) return;
-  if (!selectedCard) {{
-    selectedCard = card;
-    card.classList.add('selected');
-    return;
-  }}
-  if (selectedCard === card) {{
-    card.classList.remove('selected');
-    selectedCard = null;
-    return;
-  }}
-  const a = selectedCard.getAttribute('data-pid');
-  const b = card.getAttribute('data-pid');
-  if (a === b) {{
-    markCorrect(selectedCard); markCorrect(card);
-    selectedCard.classList.remove('selected');
-    selectedCard = null;
-    correctPairs += 1; checkWin();
-  }} else {{
-    shake(selectedCard); shake(card);
-    selectedCard.classList.remove('selected');
-    selectedCard = null;
-  }}
+  if (!selectedCard) {{ selectedCard = card; card.classList.add('selected'); return; }}
+  if (selectedCard === card) {{ card.classList.remove('selected'); selectedCard = null; return; }}
+  const a = selectedCard.getAttribute('data-pid'); const b = card.getAttribute('data-pid');
+  if (a === b) {{ markCorrect(selectedCard); markCorrect(card); selectedCard.classList.remove('selected'); selectedCard = null; correctPairs += 1; checkWin(); }}
+  else {{ shake(selectedCard); shake(card); selectedCard.classList.remove('selected'); selectedCard = null; }}
 }}
 
-function shake(el) {{
-  el.classList.remove('wrong');
-  void el.offsetWidth; // reflow
-  el.classList.add('wrong');
-  setTimeout(() => el.classList.remove('wrong'), 250);
-}}
-
-function shuffleArray(arr) {{
-  for (let i = arr.length - 1; i > 0; i--) {{
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }}
-  return arr;
-}}
-
-function layoutShuffled() {{
-  clearBoard();
-  const box = document.getElementById('box');
-  let cards = [];
-  for (const p of pairs) {{
-    cards.push({{ text: p.de, pid: p.id }});
-    cards.push({{ text: p.en, pid: p.id }});
-  }}
-  shuffleArray(cards);
-  for (const c of cards) {{
-    box.appendChild(createCard(c.text, c.pid));
-  }}
-}}
-
-function checkWin() {{
-  if (correctPairs === pairs.length && !solved) {{
-    solved = true;
-    pauseTimer();
-    const timeText = document.getElementById('timer').textContent;
-    const msg = "Congratulations! Time: " + timeText;
-    document.getElementById('result').textContent = msg;
-    alert(msg);
-  }}
-}}
-
-function setModeLabel() {{
-  const b = document.getElementById('modeBtn');
-  b.textContent = "Mode: " + (TAP_MODE || !nativeDnD ? "Tap" : "Drag");
-}}
+function shake(el) {{ el.classList.remove('wrong'); void el.offsetWidth; el.classList.add('wrong'); setTimeout(() => el.classList.remove('wrong'), 250); }}
+function shuffleArray(arr) {{ for (let i = arr.length - 1; i > 0; i--) {{ const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }} return arr; }}
+function layoutShuffled() {{ clearBoard(); const box = document.getElementById('box'); let cards = []; for (const p of pairs) {{ cards.push({{ text: p.de, pid: p.id }}); cards.push({{ text: p.en, pid: p.id }}); }} shuffleArray(cards); for (const c of cards) {{ box.appendChild(createCard(c.text, c.pid)); }} }}
+function checkWin() {{ if (correctPairs === pairs.length && !solved) {{ solved = true; pauseTimer(); const timeText = document.getElementById('timer').textContent; const msg = "Congratulations! Time: " + timeText; document.getElementById('result').textContent = msg; alert(msg); }} }}
+function setModeLabel() {{ const b = document.getElementById('modeBtn'); b.textContent = "Mode: " + (TAP_MODE || !nativeDnD ? "Tap" : "Drag"); }}
 
 document.getElementById('startBtn').addEventListener('click', () => startTimer());
 document.getElementById('pauseBtn').addEventListener('click', () => pauseTimer());
 document.getElementById('resetBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
 document.getElementById('shuffleBtn').addEventListener('click', () => {{ resetTimer(); layoutShuffled(); }});
-document.getElementById('modeBtn').addEventListener('click', () => {{
-  if (!nativeDnD) return; // wenn kein DnD, bleibt Tap
-  TAP_MODE = !TAP_MODE;
-  setModeLabel();
-  layoutShuffled();
-}});
-
-// Initial
-setModeLabel();
-layoutShuffled();
+document.getElementById('modeBtn').addEventListener('click', () => {{ if (!nativeDnD) return; TAP_MODE = !TAP_MODE; setModeLabel(); layoutShuffled(); }});
+setModeLabel(); layoutShuffled();
 </script>
 </body>
 </html>"""
-
     st.components.v1.html(html, height=600, scrolling=True)
-
 
 # ---------- Eingabe (DE → EN) ----------
 
 def game_input(df_view: pd.DataFrame, classe: str, page: int):
-    """
-    Eingabespiel (DE→EN):
-    - Stabiler Items-Index im State (keine Vertauschungen)
-    - Timer, Enter zum Prüfen
-    - Show solution (DE — EN), Next word (skip)
-    - Live-History mit Result (Correct/Wrong/Skipped)
-    """
     items = [
         {"de": r["de"], "en": r["en"]}
         for r in df_view.to_dict("records")
@@ -694,28 +555,17 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
     if not items:
         st.info("No vocabulary.")
         return
-
     state_key = f"input_state_{classe}_{page}"
     st_state = st.session_state.get(state_key)
-
-    items_hash = _hash_items(items)
+    items_hash = _hash_dict_list(items, ["de","en"])
     if (st_state is None) or (st_state.get("items_hash") != items_hash):
-        order = list(range(len(items)))
-        random.Random().shuffle(order)
+        order = list(range(len(items))); random.Random().shuffle(order)
         st_state = {
-            "items_hash": items_hash,
-            "items": items,
-            "order": order,
-            "index": 0,
-            "score": 0,
-            "total": 0,
-            "history": [],  # {de, user, en, result}
-            "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
+            "items_hash": items_hash, "items": items, "order": order, "index": 0,
+            "score": 0, "total": 0, "history": [], "timer": {"running": False, "started_ms": 0, "elapsed_ms": 0},
         }
         st.session_state[state_key] = st_state
-
     _timer_block("Input", st_state["timer"], rerun_key=f"{state_key}_timer")
-
     i = st_state["index"]
     if i >= len(st_state["order"]):
         t = st_state["timer"]
@@ -725,65 +575,173 @@ def game_input(df_view: pd.DataFrame, classe: str, page: int):
         if st_state["history"]:
             df_hist = pd.DataFrame(st_state["history"])
             st.subheader("History")
-            st.dataframe(
-                df_hist.rename(columns={
-                    "de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"
-                }),
-                use_container_width=True
-            )
+            st.dataframe(df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}), use_container_width=True)
         return
-
-    idx = st_state["order"][i]
-    item = st_state["items"][idx]
+    idx = st_state["order"][i]; item = st_state["items"][idx]
     st.write(f"**German (DE):** {item['de']}")
-
     cskip, csol = st.columns(2)
     with cskip:
         if st.button("Next word (skip)", key=f"{state_key}_skip_{i}"):
             st_state["history"].append({"de": item["de"], "user": "", "en": item["en"], "result": "Skipped"})
-            st_state["index"] += 1
-            st.session_state[state_key] = st_state
-            st.rerun()
+            st_state["index"] += 1; st.session_state[state_key] = st_state; st.rerun()
     with csol:
         if st.button("Show solution", key=f"{state_key}_showsol_{i}"):
             st.info(f"Solution: {item['de']} — {item['en']}")
-
     with st.form(key=f"input_form_{state_key}_{i}", clear_on_submit=True):
         user = st.text_input("English (EN):", key=f"user_{state_key}_{i}")
         submitted = st.form_submit_button("Check (Enter)")
-
     if submitted:
         st_state["total"] += 1
         ok = normalize_text(user) == normalize_text(item["en"])
         res = "Correct" if ok else "Wrong"
         if ok:
-            st_state["score"] += 1
-            st.success("Correct!")
+            st_state["score"] += 1; st.success("Correct!")
         else:
             st.warning("Wrong.")
         st_state["history"].append({"de": item["de"], "user": user, "en": item["en"], "result": res})
-        st_state["index"] += 1
-        st.session_state[state_key] = st_state
-        st.rerun()
-
+        st_state["index"] += 1; st.session_state[state_key] = st_state; st.rerun()
     if st_state["history"]:
         df_hist = pd.DataFrame(st_state["history"])
         st.subheader("History (so far)")
-        st.dataframe(
-            df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}).tail(10),
-            use_container_width=True
-        )
+        st.dataframe(df_hist.rename(columns={"de": "DE", "user": "Your answer", "en": "EN (correct)", "result": "Result"}).tail(10), use_container_width=True)
 
+# ---------- Unregelmäßige Verben – Zuordnen (aus Code) ----------
+
+def game_irregulars_assign():
+    # helpers
+    def _norm(s: str) -> str:
+        return s.strip().lower()
+    def allowed_forms(target_key: str, verb: dict) -> set[str]:
+        raw = verb[target_key]
+        forms = [raw]
+        if "/" in raw:
+            forms += [p.strip() for p in raw.split("/")]
+        return {_norm(x) for x in forms}
+
+    # init points
+    if "verbs_points_total" not in st.session_state:
+        st.session_state.verbs_points_total = 0
+
+    # new round builder
+    def new_round():
+        verb = random.choice(VERBS)
+        items = [
+            {"text": verb["infinitive"], "match": "infinitive", "hidden": False},
+            {"text": verb["pastSimple"], "match": "pastSimple", "hidden": False},
+            {"text": verb["pastParticiple"], "match": "pastParticiple", "hidden": False},
+            {"text": verb["meaning"], "match": "meaning", "hidden": False},
+        ]
+        random.shuffle(items)
+        st.session_state.verbs_round = {
+            "verb": verb,
+            "items": items,
+            "matches": {t[1]: None for t in VERB_TARGETS},
+            "start_ts": int(time.time()),
+            "completed": False,
+        }
+        st.session_state.verbs_selected_idx = None
+        if "verbs_word_radio" in st.session_state:
+            del st.session_state["verbs_word_radio"]
+
+    # init round
+    if "verbs_round" not in st.session_state:
+        new_round()
+    if "verbs_selected_idx" not in st.session_state:
+        st.session_state.verbs_selected_idx = None
+
+    st.title("Unregelmäßige Verben – Zuordnen (Tippen statt Ziehen)")
+    st.caption("Links ein **Wort** wählen, rechts das **Ziel** tippen. Slash-Formen (z. B. was/were) werden akzeptiert.")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("🔁 Runde neu starten"):
+            new_round(); st.rerun()
+    with c2:
+        if st.button("🧹 Punkte zurücksetzen"):
+            st.session_state.verbs_points_total = 0
+            new_round(); st.rerun()
+    with c3:
+        if st.button("❌ Auswahl aufheben"):
+            st.session_state.verbs_selected_idx = None
+            if "verbs_word_radio" in st.session_state:
+                del st.session_state["verbs_word_radio"]
+            st.rerun()
+
+    elapsed = int(time.time() - st.session_state.verbs_round["start_ts"])
+    st.markdown(f"**Zeit:** {elapsed} Sek.  **Punkte gesamt:** {st.session_state.verbs_points_total}")
+
+    left, right = st.columns(2, gap="large")
+
+    # Wörter links (Radio)
+    with left:
+        st.subheader("Wörter")
+        options = [(idx, it["text"]) for idx, it in enumerate(st.session_state.verbs_round["items"]) if not it["hidden"]]
+        if options:
+            labels = ["— bitte wählen —"] + [txt for _, txt in options]
+            indices = [None] + [idx for idx, _ in options]
+            # Reset falls ausgewähltes Element versteckt wurde
+            if st.session_state.verbs_selected_idx is not None:
+                if st.session_state.verbs_round["items"][st.session_state.verbs_selected_idx]["hidden"]:
+                    st.session_state.verbs_selected_idx = None
+                    if "verbs_word_radio" in st.session_state:
+                        del st.session_state["verbs_word_radio"]
+            # Radio
+            if "verbs_word_radio" in st.session_state and st.session_state["verbs_word_radio"] in labels:
+                chosen_label = st.radio("Wähle ein Wort", labels, key="verbs_word_radio")
+            else:
+                chosen_label = st.radio("Wähle ein Wort", labels, index=0, key="verbs_word_radio")
+            st.session_state.verbs_selected_idx = indices[labels.index(chosen_label)]
+            if st.session_state.verbs_selected_idx is not None:
+                st.info(f"Ausgewählt: **{chosen_label}**")
+        else:
+            st.write("Alle Wörter sind zugeordnet ✅")
+
+    # Ziele rechts (Buttons)
+    with right:
+        st.subheader("Ziele")
+        for label, target_key in VERB_TARGETS:
+            current_match = st.session_state.verbs_round["matches"][target_key]
+            if current_match is None:
+                clicked = st.button(label, key=f"verbs_target_{target_key}")
+            else:
+                matched_text = st.session_state.verbs_round["items"][current_match]["text"]
+                clicked = st.button(f"{label}: ✅ {matched_text}", key=f"verbs_target_{target_key}", disabled=True)
+            if clicked:
+                sel_idx = st.session_state.verbs_selected_idx
+                if sel_idx is None:
+                    st.warning("Bitte erst links ein Wort auswählen.")
+                else:
+                    item = st.session_state.verbs_round["items"][sel_idx]
+                    allowed = allowed_forms(target_key, st.session_state.verbs_round["verb"])
+                    if normalize_text(item["text"]) in allowed:
+                        st.session_state.verbs_round["matches"][target_key] = sel_idx
+                        st.session_state.verbs_round["items"][sel_idx]["hidden"] = True
+                        st.session_state.verbs_points_total += 1
+                        st.session_state.verbs_selected_idx = None
+                        if "verbs_word_radio" in st.session_state:
+                            del st.session_state["verbs_word_radio"]
+                        st.success("Richtig! ✅"); st.rerun()
+                    else:
+                        st.error("Falsch – wähle ein anderes Ziel (Auswahl bleibt).")
+
+    # Abschluss der Runde
+    all_done = all(v is not None for v in st.session_state.verbs_round["matches"].values())
+    if all_done and not st.session_state.verbs_round["completed"]:
+        st.session_state.verbs_round["completed"] = True
+        total_time = int(time.time() - st.session_state.verbs_round["start_ts"])
+        st.success(f"Geschafft! Zeit: {total_time} Sek.")
+        if st.button("Nächste Runde starten"):
+            new_round(); st.rerun()
 
 # ============================ Main ============================
 
 def main():
     st.set_page_config(page_title="Wortschatz-Spiele (Klassen 7–9)", page_icon="📚", layout="wide")
-    st.title("Wortschatz-Spiele (Klassen 7–9) – Grundkurse")
+    st.title("Wortschatz-Spiele (Klassen 7–9) – Nur 'Diese Seite'")
 
     c_left, c_mid, c_debug = st.columns([2, 1, 1])
     with c_left:
-        st.caption("Quelle: CSVs unter `/data/pages/klasseK/klasseK_pageS.csv`.")
+        st.caption("Quelle: CSVs unter `/data/pages/klasseK/klasseK_pageS.csv`. Unregelmäßige Verben sind im Code enthalten.")
     with c_mid:
         if st.button("Cache leeren"):
             st.cache_data.clear(); st.rerun()
@@ -792,18 +750,26 @@ def main():
 
     DATA_DIR = Path(__file__).parent / "data"
 
+    # --- Seiten-Vokabeln (DE↔EN) ---
     file_info_df = get_vocab_file_info(DATA_DIR)
     file_info_df = file_info_df[file_info_df["classe"].isin({"7", "8", "9"})]
     file_info_df = file_info_df[file_info_df["is_page_specific"] == True]
 
     if file_info_df.empty:
         st.warning("Keine seiten-spezifischen CSVs für Klassen 7–9 gefunden.")
+        # Trotzdem Spielauswahl ermöglichen (für Verben)
+        game = st.selectbox("Wähle ein Spiel", ("Unregelmäßige Verben – Zuordnen",))
+        if game == "Unregelmäßige Verben – Zuordnen":
+            game_irregulars_assign()
         return
 
     classe = st.selectbox("Klasse", sorted(file_info_df["classe"].unique(), key=int), index=2)
     pages = sorted(file_info_df[file_info_df["classe"] == classe]["page"].unique(), key=int)
     if not pages:
         st.warning(f"Keine Seiten für Klasse {classe} gefunden.")
+        game = st.selectbox("Wähle ein Spiel", ("Unregelmäßige Verben – Zuordnen",))
+        if game == "Unregelmäßige Verben – Zuordnen":
+            game_irregulars_assign()
         return
 
     page = st.selectbox("Seite", pages, index=0)
@@ -813,75 +779,84 @@ def main():
         (file_info_df['page'] == page)
     ]['path']
 
-    if page_specific_paths.empty:
-        st.info("Für diese Seite existiert keine seiten-spezifische CSV unter data/pages/klasseX/klasseX_pageY.csv.")
-        return
+    df_view = pd.DataFrame()
+    if not page_specific_paths.empty:
+        df_view = load_and_preprocess_df(page_specific_paths.iloc[0])
+        df_view = _filter_by_page_rows(df_view, int(classe), int(page))
 
-    df_view = load_and_preprocess_df(page_specific_paths.iloc[0])
-    df_view = _filter_by_page_rows(df_view, int(classe), int(page))
-
-    if df_view.empty:
-        st.info("Keine Vokabeln für diese Seite.")
-        return
-
-    st.write(f"**Vokabeln verfügbar (Seite):** {len(df_view)}")
+    st.write(f"**Vokabeln verfügbar (Seite):** {len(df_view)}" if not df_view.empty else "**Vokabeln verfügbar (Seite):** 0")
 
     if debug_on:
         with st.expander("Debug-Info"):
             st.write("Datei-Info (erste 50):", file_info_df.head(50))
-            st.write("Beispiel-Daten (erste 20):", df_view.head(20))
-            st.write("Seitenverteilung:", df_view["page"].value_counts().head(10))
+            st.write("Beispiel-Daten (erste 20):", df_view.head(20) if not df_view.empty else "—")
+            if not df_view.empty:
+                st.write("Seitenverteilung:", df_view["page"].value_counts().head(10))
 
-    st.subheader("Filter: Nur Einzelwörter")
-    col1, col2, col3 = st.columns([1.5, 1, 1])
-    with col1:
-        filter_simple = st.checkbox("Nur Einzelwörter aktivieren", value=False)
-    with col2:
-        ignore_articles = st.checkbox("Artikel (to/the/a/an) ignorieren", value=True)
-    with col3:
-        ignore_abbrev = st.checkbox("Abkürzungen (z. B. sth/sb) ignorieren", value=True)
-    min_length = st.slider("Minimale Wortlänge", 1, 6, 2, 1)
-
-    if filter_simple:
-        mask = df_view["en"].apply(lambda x: is_simple_word(
-            x, ignore_articles=ignore_articles, ignore_abbrev=ignore_abbrev, min_length=min_length
-        ))
-        df_view = df_view[mask].reset_index(drop=True)
-        st.write(f"**Vokabeln nach Filter:** {len(df_view)}")
-        if df_view.empty:
-            st.info("Der Filter entfernt alle Vokabeln. Passe die Einstellungen an.")
-            return
+    # Filter: Nur Einzelwörter (nur für DE↔EN-Spiele)
+    if not df_view.empty:
+        st.subheader("Filter: Nur Einzelwörter")
+        col1, col2, col3 = st.columns([1.5, 1, 1])
+        with col1:
+            filter_simple = st.checkbox("Nur Einzelwörter aktivieren", value=False)
+        with col2:
+            ignore_articles = st.checkbox("Artikel (to/the/a/an) ignorieren", value=True)
+        with col3:
+            ignore_abbrev = st.checkbox("Abkürzungen (z. B. sth/sb) ignorieren", value=True)
+        min_length = st.slider("Minimale Wortlänge", 1, 6, 2, 1)
+        if filter_simple:
+            mask = df_view["en"].apply(lambda x: is_simple_word(
+                x, ignore_articles=ignore_articles, ignore_abbrev=ignore_abbrev, min_length=min_length
+            ))
+            df_view = df_view[mask].reset_index(drop=True)
+            st.write(f"**Vokabeln nach Filter:** {len(df_view)}")
+            if df_view.empty:
+                st.info("Der Filter entfernt alle Vokabeln. Passe die Einstellungen an.")
 
     seed_val = st.text_input("Seed (optional – gleiche Reihenfolge/Subsets)", value="")
-    game = st.selectbox("Wähle ein Spiel", ("Hangman", "Wörtermemory", "Eingabe (DE → EN)"))
+    game = st.selectbox("Wähle ein Spiel", (
+        "Hangman",
+        "Wörtermemory",
+        "Eingabe (DE → EN)",
+        "Unregelmäßige Verben – Zuordnen",
+    ))
 
     if game == "Hangman":
-        game_hangman(df_view, classe, page, seed_val)
+        if df_view.empty:
+            st.info("Für Hangman sind Seiten-Vokabeln nötig.")
+        else:
+            game_hangman(df_view, classe, page, seed_val)
 
     elif game == "Wörtermemory":
-        # Anzahl-Picker: ganze Seite oder k-Paare
-        max_pairs = len(df_view)
-        cA, cB, cC = st.columns([1, 1, 1.5])
-        with cA:
-            subset_all = st.checkbox("Ganze Seite abfragen", value=True)
-        with cB:
-            if subset_all:
-                subset_k = max_pairs
-                st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=max_pairs, step=1, disabled=True)
-            else:
-                default_k = min(10, max_pairs) if max_pairs >= 2 else max_pairs
-                subset_k = st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=default_k, step=1)
-        with cC:
-            show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
+        if df_view.empty:
+            st.info("Für Wörtermemory sind Seiten-Vokabeln nötig.")
+        else:
+            max_pairs = len(df_view)
+            cA, cB, cC = st.columns([1, 1, 1.5])
+            with cA:
+                subset_all = st.checkbox("Ganze Seite abfragen", value=True)
+            with cB:
+                if subset_all:
+                    subset_k = max_pairs
+                    st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=max_pairs, step=1, disabled=True)
+                else:
+                    default_k = min(10, max_pairs) if max_pairs >= 2 else max_pairs
+                    subset_k = st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs, value=default_k, step=1)
+            with cC:
+                show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
+            subset_mode = "all" if subset_all else "k"
+            game_word_memory(df_view, classe, page, show_solution_table, subset_mode, int(subset_k), seed_val)
 
-        subset_mode = "all" if subset_all else "k"
-        game_word_memory(df_view, classe, page, show_solution_table, subset_mode, int(subset_k), seed_val)
+    elif game == "Eingabe (DE → EN)":
+        if df_view.empty:
+            st.info("Für das Eingabe-Spiel sind Seiten-Vokabeln nötig.")
+        else:
+            game_input(df_view, classe, page)
 
-    else:
-        game_input(df_view, classe, page)
+    else:  # Unregelmäßige Verben – Zuordnen
+        game_irregulars_assign()
 
-    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Geladene Vokabeln (aktiv): {len(df_view)}")
-
+    st.caption(f"Sitzung: {datetime.now().strftime('%d.%m.%Y %H:%M')} — Geladene Vokabeln (Seite): {len(df_view)}")
 
 if __name__ == "__main__":
     main()
