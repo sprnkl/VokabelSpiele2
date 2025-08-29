@@ -147,13 +147,13 @@ def fmt_ms(ms: int) -> str:
 # ============================ Hangman Art ============================
 
 HANGMAN_PICS = [
-    " +---+\n     |\n     |\n     |\n    ===",
-    " +---+\n O   |\n     |\n     |\n    ===",
-    " +---+\n O   |\n |   |\n     |\n    ===",
-    " +---+\n O   |\n/|   |\n     |\n    ===",
-    " +---+\n O   |\n/|\\  |\n     |\n    ===",
-    " +---+\n O   |\n/|\\  |\n/    |\n    ===",
-    " +---+\n O   |\n/|\\  |\n/ \\  |\n    ===",
+    " +---+\n     |\n     |\n     |\n   ===",
+    " +---+\n O   |\n     |\n     |\n   ===",
+    " +---+\n O   |\n |   |\n     |\n   ===",
+    " +---+\n O   |\n/|   |\n     |\n   ===",
+    " +---+\n O   |\n/|\\  |\n     |\n   ===",
+    " +---+\n O   |\n/|\\  |\n/    |\n   ===",
+    " +---+\n O   |\n/|\\  |\n/ \\  |\n   ===",
 ]
 
 # ============================ CSV-Erkennung & Laden ============================
@@ -186,7 +186,7 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
     for c in df.columns:
         lc = str(c).strip().lower()
         if lc in {"klasse", "class", "classe"}: col_map[c] = "classe"
-        elif lc in {"seite", "page", "pg"}:     col_map[c] = "page"
+        elif lc in {"seite", "page", "pg"}:      col_map[c] = "page"
         elif lc in {"de","german","deutsch","wort","vokabel","vokabel_de"}: col_map[c] = "de"
         elif lc in {"en","englisch","english","translation","vokabel_en"}:  col_map[c] = "en"
     df = df.rename(columns=col_map)
@@ -817,7 +817,6 @@ def game_irregulars_assign():
                     if normalize_text(item["text"]) in allowed:
                         st.session_state.verbs_round["matches"][target_key] = sel_idx
                         st.session_state.verbs_round["items"][sel_idx]["hidden"] = True
-                        st.session_state.verbs_points_total += 1
                         st.session_state.verbs_selected_idx = None
                         if "verbs_word_radio" in st.session_state:
                             del st.session_state["verbs_word_radio"]
@@ -919,43 +918,43 @@ def main():
             game_hangman(df_view, classe, page, seed_val)
 
     elif game == "Wörtermemory":
-    if df_view.empty:
-        st.info("Für Wörtermemory sind Seiten-Vokabeln nötig.")
-    else:
-        max_pairs = len(df_view)
+        if df_view.empty:
+            st.info("Für Wörtermemory sind Seiten-Vokabeln nötig.")
+        else:
+            max_pairs = len(df_view)
 
-        cA, cB, cC = st.columns([1, 1, 1.5])
-        with cA:
-            subset_all = st.checkbox("Ganze Seite abfragen", value=True)
-        with cB:
-            if subset_all:
-                subset_k = max_pairs
-                st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs,
-                                value=max_pairs, step=1, disabled=True)
-            else:
-                default_k = min(10, max_pairs) if max_pairs >= 2 else max_pairs
-                subset_k = st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs,
-                                           value=default_k, step=1)
-        with cC:
-            show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
+            cA, cB, cC = st.columns([1, 1, 1.5])
+            with cA:
+                subset_all = st.checkbox("Ganze Seite abfragen", value=True)
+            with cB:
+                if subset_all:
+                    subset_k = max_pairs
+                    st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs,
+                                    value=max_pairs, step=1, disabled=True)
+                else:
+                    default_k = min(10, max_pairs) if max_pairs >= 2 else max_pairs
+                    subset_k = st.number_input("Anzahl Paare", min_value=2, max_value=max_pairs,
+                                                value=default_k, step=1)
+            with cC:
+                show_solution_table = st.checkbox("Show solution (as list: DE — EN)", value=False)
 
-        # NEU: Button, der eine neue Stichprobe aus der Seite erzwingt
-        col_new, _ = st.columns([1, 3])
-        with col_new:
-            refresh_subset = st.button(
-                "Neue Wortauswahl (neue Paare)",
-                disabled=subset_all or max_pairs < 2,
-                help="Zieht ein neues zufälliges Teil-Set von dieser Seite."
+            # NEU: Button, der eine neue Stichprobe aus der Seite erzwingt
+            col_new, _ = st.columns([1, 3])
+            with col_new:
+                refresh_subset = st.button(
+                    "Neue Wortauswahl (neue Paare)",
+                    disabled=subset_all or max_pairs < 2,
+                    help="Zieht ein neues zufälliges Teil-Set von dieser Seite."
+                )
+
+            subset_mode = "all" if subset_all else "k"
+
+            game_word_memory(
+                df_view, classe, page,
+                show_solution_table, subset_mode, int(subset_k),
+                seed_val,
+                force_new_subset=refresh_subset
             )
-
-        subset_mode = "all" if subset_all else "k"
-
-        game_word_memory(
-            df_view, classe, page,
-            show_solution_table, subset_mode, int(subset_k),
-            seed_val,
-            force_new_subset=refresh_subset   # <<<<< NEU
-        )
 
 
     elif game == "Eingabe (DE → EN)":
