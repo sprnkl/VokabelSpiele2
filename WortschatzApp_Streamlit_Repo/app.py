@@ -184,25 +184,21 @@ def get_vocab_file_info(base_dir: Path) -> pd.DataFrame:
     """
     rows = []
 
-    # Regex zum Extrahieren der Seitenzahl (z.B. page14 -> 14)
     PAGE_REGEX = re.compile(r"page(\d+)", re.IGNORECASE)
-    # Regex: Ordnername "klasse7_e", "klasse7_g", "klasse7_französisch", "klasse7_franzoesisch"
     KLASSE_REGEX = re.compile(r"klasse(\d+)_?(e|g|französisch|franzoesisch)?$", re.IGNORECASE)
 
-    # A) Neues Schema: prepared_data/pages/klasseX_<kurs>/klasseX_<kurs>_pageY.csv
+    # Neues Schema
     new_root = base_dir / "prepared_data" / "pages"
     if new_root.exists():
         for p in new_root.rglob("*.csv"):
-            folder = p.parent.name.lower()  # z.B. "klasse7_französisch"
+            folder = p.parent.name.lower()
             klasse_match = KLASSE_REGEX.match(folder)
-            page_match = PAGE_REGEX.search(p.stem)  # z.B. "klasse7_französisch_page168"
-
+            page_match = PAGE_REGEX.search(p.stem)
             if klasse_match and page_match:
                 try:
                     num = int(klasse_match.group(1))
                     course_raw = (klasse_match.group(2) or "").lower()
 
-                    # Normalisierung: 'franzoesisch' -> 'französisch'
                     if course_raw in ["französisch", "franzoesisch"]:
                         course = "französisch"
                     elif course_raw in ["e", "g"]:
@@ -212,7 +208,6 @@ def get_vocab_file_info(base_dir: Path) -> pd.DataFrame:
 
                     page = int(page_match.group(1))
 
-                    # Französisch nur für Klassen 6–9 zulassen (harter Filter)
                     if course == "französisch" and num not in (6, 7, 8, 9):
                         continue
 
@@ -224,19 +219,17 @@ def get_vocab_file_info(base_dir: Path) -> pd.DataFrame:
                 except Exception:
                     continue
 
-    # B) Altes Schema: data/pages/klasseX/klasseX_pageY.csv (ohne Kurs)
+    # Altes Schema
     old_root = base_dir / "data" / "pages"
     if old_root.exists():
         for p in old_root.rglob("*.csv"):
-            folder = p.parent.name.lower()  # z.B. "klasse7"
-            # altes Muster: genau "klasse<zahl>"
+            folder = p.parent.name.lower()
             m_old = re.match(r"klasse(\d+)$", folder, re.IGNORECASE)
             page_match = PAGE_REGEX.search(p.stem)
             if m_old and page_match:
                 try:
                     num = int(m_old.group(1))
                     page = int(page_match.group(1))
-                    # Alt: kein Kurs
                     label = f"Klasse {num}"
                     rows.append({"classe": num, "course": "", "page": page, "path": p, "label": label})
                 except Exception:
@@ -247,11 +240,9 @@ def get_vocab_file_info(base_dir: Path) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
 
-    # Sicherstellen: Französisch 6–9 (falls aus A) nicht vollständig abgefangen)
     mask_fr = (df["course"] == "französisch")
     df = df[~mask_fr | df["classe"].isin([6, 7, 8, 9])].copy()
 
-    # Sortierung: Klasse (5–10), dann Kurs (E vor G vor Französisch, dann leer), dann Seite
     df["_k"] = df["classe"].astype(int)
     order_map = {"e": 0, "g": 1, "französisch": 2, "": 3}
     df["_c"] = df["course"].map(order_map).fillna(3).astype(int)
@@ -262,10 +253,7 @@ def get_vocab_file_info(base_dir: Path) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_and_preprocess_df(path: Path) -> pd.DataFrame:
-    """
-    CSV laden und auf Schema ['classe','page','de','en'] normalisieren.
-    Akzeptiert französische Kopfzeilen und mappt sie auf 'en'.
-    """
+    """CSV laden und auf Schema ['classe','page','de','en'] normalisieren."""
     try:
         df = pd.read_csv(path, sep=None, engine="python")
     except Exception as e:
@@ -285,12 +273,9 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
             "en", "englisch", "english", "translation", "vokabel_en",
             "fr", "französisch", "français", "francais", "french"
         }:
-            # Wichtig: Französisch-Header werden intern als 'en' geführt.
             col_map[c] = "en"
 
     df = df.rename(columns=col_map)
-
-    # Fehlende Spalten ergänzen
     for req in ["classe", "page", "de", "en"]:
         if req not in df.columns:
             df[req] = None
@@ -300,7 +285,6 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
     df["en"] = df["en"].astype(str).str.strip()
     df = df.dropna(how="all", subset=["de", "en"])
 
-    # Versuche, classe/page numerisch zu casten (robuster Filter später)
     for k in ["classe", "page"]:
         try:
             df[k] = pd.to_numeric(df[k], errors="coerce")
@@ -428,7 +412,7 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
         t = state["timer"]; t["running"] = False; t["started_ms"] = 0; t["elapsed_ms"] = 0
         state["idx"] += 1
         if state["idx"] >= len(rows):
-            order = list(range(len(rows"]))
+            order = list(range(len(rows)))   # FIX
             rnd = random.Random(seed_val) if seed_val else random.Random()
             rnd.shuffle(order)
             state["order"] = order
@@ -750,7 +734,7 @@ function shake(el) {{
 function shuffleArray(arr) {{
   for (let i = arr.length - 1; i > 0; i--) {{
     const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j]], arr[i];
+    [arr[i], arr[j]] = [arr[j], arr[i]];  // FIX
   }}
   return arr;
 }}
@@ -911,7 +895,7 @@ def game_irregulars_assign():
         items = [
             {"text": verb["infinitive"],       "match": "infinitive",       "hidden": False},
             {"text": verb["pastSimple"],       "match": "pastSimple",       "hidden": False},
-            {"text": verb["pastParticiple"], "match": "pastParticiple", "hidden": False},
+            {"text": verb["pastParticiple"],   "match": "pastParticiple",   "hidden": False},
             {"text": verb["meaning"],          "match": "meaning",          "hidden": False},
         ]
         random.shuffle(items)
@@ -1006,10 +990,7 @@ def game_irregulars_assign():
                         selected_item = st.session_state.verbs_round["items"][target_idx]
                         selected_text = selected_item["text"]
 
-                        target_forms = {normalize_text(x) for x in [st.session_state.verbs_round["verb"][key]]}
-                        if key != "meaning" and "/" in st.session_state.verbs_round["verb"][key]:
-                            target_forms |= {normalize_text(p.strip()) for p in st.session_state.verbs_round["verb"][key].split("/")}
-
+                        target_forms = allowed_forms(key, st.session_state.verbs_round["verb"])
                         selected_norm = normalize_text(selected_text)
                         is_correct = selected_norm in target_forms
 
@@ -1035,7 +1016,7 @@ def game_irregulars_assign():
     if st.session_state.verbs_round["completed"]:
         total_time = int(time.time() - st.session_state.verbs_round["start_ts"])
         st.balloons()
-        st.success(f"Sehr gut! Alle 4 Formen von **{st.sessionState.verbs_round['verb']['meaning']}** korrekt zugeordnet! Zeit: {total_time} Sek.")
+        st.success(f"Sehr gut! Alle 4 Formen von **{st.session_state.verbs_round['verb']['meaning']}** korrekt zugeordnet! Zeit: {total_time} Sek.")
         if st.button("Nächste Runde starten"):
             new_round(); st.rerun()
 
@@ -1046,7 +1027,7 @@ def main():
 
     st.title("📚 Wortschatz-Spiele")
 
-    # Sidebar-Steuerung
+    # Sidebar
     with st.sidebar:
         if st.button("🧹 Cache leeren (Dateisuche neu starten)"):
             st.cache_data.clear()
@@ -1056,7 +1037,6 @@ def main():
             st.session_state.dev_mode = False
         st.session_state.dev_mode = st.checkbox("Dev/Debug-Modus", value=st.session_state.dev_mode, key="dev_mode_cbox")
 
-    # 1. Dateisuche und Klassen-/Seiten-Info
     df_info = get_vocab_file_info(BASE_DIR)
 
     if df_info.empty:
@@ -1073,11 +1053,9 @@ def main():
             st.write("df_info ist leer.")
         return
 
-    # Dropdown-Labels
     def sort_key(label: str):
         m = re.search(r"Klasse (\d+)", label)
         klasse_num = int(m.group(1)) if m else 99
-        # Kurs-Gewichtung konsistent zu get_vocab_file_info
         kurs_order = 0 if 'E-Kurs' in label else (1 if 'G-Kurs' in label else (2 if 'Französisch' in label else 3))
         return (klasse_num, kurs_order)
 
@@ -1098,7 +1076,6 @@ def main():
         if df_vocab.empty:
             st.warning(f"Datei **{selected_path.name}** enthält keine Vokabeln.")
 
-        # 3. Spiel-Auswahl
         game_options = {
             "Eingabe (DE → EN)": "input",
             "Wörter Memory (DE ↔ EN)": "memory",
