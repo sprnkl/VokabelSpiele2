@@ -254,18 +254,26 @@ def get_vocab_file_info(base_dir: Path) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_and_preprocess_df(path: Path) -> pd.DataFrame:
     """CSV laden und auf Schema ['classe','page','de','en'] normalisieren.
-    Versucht automatische Erkennung, fällt auf Semikolon (;) zurück, um
-    französische/deutsche Dateien robust zu laden."""
+    Versucht explizite Trennzeichen und Codierung für robuste Ladung."""
+    
+    # 1. Versuch: Automatische Erkennung mit UTF-8 (der beste Allrounder)
     try:
-        # 1. Versuch: Automatische Erkennung (sep=None)
-        df = pd.read_csv(path, sep=None, engine="python")
+        df = pd.read_csv(path, sep=None, engine="python", encoding='utf-8')
     except Exception:
+        # 2. Versuch: Semikolon (häufig in DE/FR) mit UTF-8
         try:
-            # 2. Versuch: Explizit Semikolon verwenden, da häufig in DE/FR-Dateien
-            df = pd.read_csv(path, sep=';', engine='python')
-        except Exception as e:
-            st.warning(f"CSV-Fehler {path.name}: {e}")
-            return pd.DataFrame()
+            df = pd.read_csv(path, sep=';', engine='python', encoding='utf-8')
+        except Exception:
+            # 3. Versuch: Komma (häufig in EN/US) mit UTF-8
+            try:
+                df = pd.read_csv(path, sep=',', engine='python', encoding='utf-8')
+            except Exception as e:
+                # 4. Fallback: Codierung unbekannt (ISO-8859-1 oder Windows-1252)
+                try:
+                    df = pd.read_csv(path, sep=None, engine='python', encoding='iso-8859-1')
+                except Exception as e:
+                    st.warning(f"CSV-Fehler {path.name}: Ladefehler, möglicherweise falsches Trennzeichen oder unbekannte Codierung: {e}")
+                    return pd.DataFrame()
 
     col_map = {}
     for c in df.columns:
