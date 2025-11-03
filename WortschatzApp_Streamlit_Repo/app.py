@@ -369,13 +369,14 @@ def _sample_subset(items, mode, k, seed_val, state_key, hash_keys):
     if not need_new:
         return st_state["subset"]
 
-    if mode == "all" or int(k) >= len(items):
+    if mode == "all" or int(k) >= len(items) or int(k) <= 1:
+        # k<=1 als Robustheit => gesamte Seite
         subset = list(items)
     else:
         order = list(range(len(items)))
         rnd = random.Random(seed_val) if seed_val else random.Random()
         rnd.shuffle(order)
-        subset = [items[i] for i in order[:max(1, int(k))]]
+        subset = [items[i] for i in order[:max(2, int(k))]]  # mindestens 2 Paare
 
     st.session_state[state_key] = {
         "base_hash": base_hash,
@@ -483,7 +484,7 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
     if state["solved"]:
         st.success(f"Congratulations! You solved it. Time: {fmt_ms(t['elapsed_ms'])}")
 
-    if not state["solved"]:
+    if not state["solved"] and state["fails"] < len(HANGMAN_PICS)-1:
         alphabet = list("abcdefghijklmnopqrstuvwxyz")
         for chunk in [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]:
             cols = st.columns(len(chunk))
@@ -504,6 +505,15 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page: int, seed_val: str):
                             st.session_state[key] = state
 
                         st.rerun()
+    elif not state["solved"] and state["fails"] >= len(HANGMAN_PICS)-1:
+        st.error("Game over. Try another word.")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Next word", key=f"{key}_nextword_fail"):
+                next_word(); st.rerun()
+        with c2:
+            if st.button("New word", key=f"{key}_newword_fail"):
+                new_word(); st.rerun()
     else:
         c1, c2 = st.columns(2)
         with c1:
@@ -531,8 +541,9 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page: int,
     if force_new_subset:
         st.session_state.pop(subset_state_key, None)
 
+    # WICHTIGER FIX: subset_mode kommt bereits als "all" oder "k" an – nicht erneut gegen UI-Label prüfen!
     items = _sample_subset(
-        base_items, "all" if subset_mode == "Alle Vokabeln" else "k", int(subset_k),
+        base_items, subset_mode, int(subset_k),
         seed_val, subset_state_key, ["de", "en"]
     )
 
@@ -1004,6 +1015,14 @@ def game_irregulars_assign():
                     if target_idx is not None:
                         selected_item = st.session_state.verbs_round["items"][target_idx]
                         selected_text = selected_item["text"]
+
+                        # erlaubte Formen (Slash tolerant)
+                        def allowed_forms(target_key: str, verb: dict) -> set[str]:
+                            raw = verb[target_key]
+                            forms = [raw]
+                            if target_key != "meaning" and "/" in raw:
+                                forms += [p.strip() for p in raw.split("/")]
+                            return {normalize_text(x) for x in forms}
 
                         target_forms = allowed_forms(key, st.session_state.verbs_round["verb"])
                         selected_norm = normalize_text(selected_text)
