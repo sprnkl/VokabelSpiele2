@@ -1,0 +1,18 @@
+# Aussehen der Wortschatz-Spiele
+# (liegt im Projektordner UND im App-Ordner, damit es lokal und auf dem Server greift)
+
+[theme]
+# Immer hell – auch wenn das Handy auf Dunkelmodus steht (sonst schlecht lesbar)
+base = "light"
+primaryColor = "#1e88e5"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f1f5fd"
+textColor = "#1f2340"
+
+[client]
+# Kein "Deploy"-Knopf / Entwickler-Menü für Schüler
+toolbarMode = "minimal"
+
+[browser]
+# Keine Nutzungsstatistik an Streamlit senden (Datenschutz an der Schule)
+gatherUsageStats = false
