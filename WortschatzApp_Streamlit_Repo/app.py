@@ -1093,6 +1093,25 @@ button[data-testid="stBaseButton-primary"]:hover {
 .game-tile-desc { font-size: .85rem; color: #666; margin: -4px 0 6px 2px; min-height: 2.4em; }
 div[data-testid="stButton"] button p { font-size: 1rem; }
 
+/* Seitenleiste farbig passend zum Kopfbereich */
+section[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #e3f2fd 0%, #ede7f6 100%);
+  border-right: 1px solid #d1c4e9;
+}
+section[data-testid="stSidebar"] .sb-head {
+  background: linear-gradient(135deg, #1e88e5 0%, #5e35b1 100%);
+  color: white; font-weight: 700; font-size: 1.15rem;
+  border-radius: 12px; padding: 10px 14px; margin-bottom: 6px;
+}
+section[data-testid="stSidebar"] .sb-sub { font-size: .85rem; color: #5e35b1; margin: 0 2px 12px 2px; }
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+  background: white; border: 2px solid #1e88e5; color: #1565c0; border-radius: 10px;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+  background: #1e88e5; color: white;
+}
+section[data-testid="stSidebar"] input { background: white; border-radius: 8px; }
+
 @media (max-width: 640px) {
   .app-hero h1 { font-size: 1.5rem; }
   .block-container { padding-top: 3rem; }
@@ -1118,7 +1137,11 @@ def main():
 
     # Sidebar (nur für Lehrkräfte relevant)
     with st.sidebar:
-        st.markdown("### ⚙️ Für Lehrkräfte")
+        st.markdown(
+            '<div class="sb-head">⚙️ Einstellungen</div>'
+            '<div class="sb-sub">Hier musst du normalerweise nichts ändern.</div>',
+            unsafe_allow_html=True,
+        )
         if st.button("🧹 Cache leeren (Dateisuche neu starten)"):
             st.cache_data.clear()
             st.rerun()
@@ -1224,7 +1247,10 @@ def main():
 
         if game_choice in ["input", "memory", "hangman"]:
             with st.sidebar:
-                seed_val = st.text_input("Seed (optional, für Reproduzierbarkeit)", value="")
+                seed_val = st.text_input(
+                    "🎲 Startwert für die Reihenfolge (optional)", value="",
+                    help="Gleicher Startwert = gleiche Wortreihenfolge, z. B. damit alle in der Klasse dieselben Wörter bekommen."
+                )
 
             if game_choice == "input":
                 if len(df_vocab) < 1:
