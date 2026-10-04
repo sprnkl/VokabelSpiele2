@@ -33,6 +33,7 @@ from pathlib import Path
 from datetime import datetime
 import random
 import hashlib
+import functools
 import inspect
 
 import pandas as pd
@@ -180,13 +181,16 @@ _LEADING_WORDS = {
 }
 
 
-def norm_answer(s: str) -> str:
-    """Vergleichs-Normalisierung: klein, ohne Akzente/Satzzeichen, Umlaute = ae/oe/ue."""
+def norm_answer(s: str, plain_umlauts: bool = False) -> str:
+    """Vergleichs-Normalisierung: klein, ohne Akzente/Satzzeichen, Umlaute = ae/oe/ue
+    (plain_umlauts=True: ä/ö/ü -> a/o/u, für Schüler, die die Punkte weglassen)."""
     if not isinstance(s, str):
         return ""
     s = s.strip().lower()
-    s = s.replace("’", "'")
+    s = s.replace("’", "'").replace("\xad", "")  # weiches Trennzeichen entfernen
     s = re.sub(r"\b(l|d|j|qu|n|s|c|m|t)'\s*", r"\1 ", s)  # l'école -> l école
+    if plain_umlauts:
+        s = s.replace("ä", "a").replace("ö", "o").replace("ü", "u")
     for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss"), ("œ", "oe"), ("æ", "ae")):
         s = s.replace(a, b)
     s = unicodedata.normalize("NFKD", s)
@@ -206,7 +210,30 @@ def _strip_leading(words: list[str]) -> list[str]:
     return words
 
 
-def answer_variants(solution: str) -> set[str]:
+_ENDINGS = {"e", "r", "s", "n", "m", "in", "en", "er", "es", "em", "innen"}
+_ENDING_TOKEN = re.compile(r"^([^\W\d_][\w-]*)((?:/[a-zäöüß]{1,5})+)([.,;:!?]*)$")
+
+
+def _expand_endings(text: str, limit: int = 64) -> set:
+    """Deutsche Kurzschreibweisen auflösen: "ein/e" -> "ein", "eine"; "andere/r/s" -> andere/anderer/anderes."""
+    if "/" not in text:
+        return set()
+    results = [""]
+    changed = False
+    for tok in text.split():
+        m = _ENDING_TOKEN.match(tok)
+        endings = m.group(2).split("/")[1:] if m else []
+        if m and endings and all(e in _ENDINGS for e in endings):
+            opts = [m.group(1) + m.group(3)] + [m.group(1) + e + m.group(3) for e in endings]
+            changed = True
+        else:
+            opts = [tok]
+        results = [(r + " " + o).strip() for r in results for o in opts][:limit]
+    return set(results) if changed else set()
+
+
+@functools.lru_cache(maxsize=20000)
+def answer_variants(solution: str) -> frozenset:
     """Alle Schreibweisen, die als richtig gelten.
 
     Beispiele: "(to) send" -> {"to send", "send"};
@@ -214,31 +241,36 @@ def answer_variants(solution: str) -> set[str]:
     "grandson / granddaughter" -> {"grandson", "granddaughter", ...}
     """
     if not isinstance(solution, str):
-        return set()
+        return frozenset()
     raw = solution.strip()
     bases = {
         raw,
         re.sub(r"\([^)]*\)", " ", raw),            # Klammerinhalt weg
         raw.replace("(", "").replace(")", ""),      # Klammern auflösen
     }
+    for b in list(bases):                           # "ein/e andere/r/s" -> "eine anderer", ...
+        bases.update(_expand_endings(b))
     parts = set()
     for b in bases:
         parts.add(b)
         for p in re.split(r"[/;,]", b):
             parts.add(p)
+        for p in re.split(r"[/;]", b):              # "der Schüler, die Schülerin; ..." -> erster Teil komplett
+            parts.add(p)
     out = set()
     for p in parts:
-        n = norm_answer(p)
-        if not n:
-            continue
-        words = n.split()
-        for w in (words, _strip_markers(words), _strip_leading(words), _strip_leading(_strip_markers(words))):
-            v = " ".join(w).strip()
-            if v:
-                out.add(v)
+        for plain in (False, True):
+            n = norm_answer(p, plain_umlauts=plain)
+            if not n:
+                continue
+            words = n.split()
+            for w in (words, _strip_markers(words), _strip_leading(words), _strip_leading(_strip_markers(words))):
+                v = " ".join(w).strip()
+                if v:
+                    out.add(v)
     # Einzelbuchstaben (z. B. aus "f/m") nicht als Antwort akzeptieren
     full = norm_answer(raw)
-    return {v for v in out if len(v) >= 2 or v == full}
+    return frozenset(v for v in out if len(v) >= 2 or v == full)
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -260,32 +292,83 @@ def _levenshtein(a: str, b: str) -> int:
     return d[la][lb]
 
 
-def check_answer(user: str, solution: str, lenient: bool = False) -> str:
+def _core(v: str) -> str:
+    """Wort ohne Artikel/"to"/Grammatik-Kürzel – Grundlage für die Tippfehler-Toleranz."""
+    return " ".join(_strip_leading(_strip_markers(v.split())))
+
+
+def _user_forms(user: str) -> set:
+    forms = set()
+    for plain in (False, True):
+        u = norm_answer(user, plain_umlauts=plain)
+        if u:
+            forms.add(u)
+            forms.add(_core(u))
+    return {f for f in forms if f}
+
+
+def _allowed_typos(n: int, lenient: bool) -> int:
+    if lenient:  # Deutsch: großzügig, aber kurze Wörter exakt (Hand ≠ Hund)
+        return 0 if n < 5 else (1 if n < 9 else (2 if n < 13 else 3))
+    return 0 if n < 4 else (1 if n < 9 else 2)
+
+
+def _best_distance(forms, variants):
+    best = None
+    for f in forms:
+        cf = _core(f)
+        for v in variants:
+            d = _levenshtein(cf, _core(v))
+            if best is None or d < best:
+                best = d
+    return best
+
+
+def check_answer(user: str, solution: str, lenient: bool = False, others=()) -> str:
     """'correct' | 'almost' (kleiner Tippfehler) | 'wrong'
 
     lenient=True (für deutsche Antworten): Rechtschreibfehler zählen als richtig,
     solange das Wort noch erkennbar ist – es geht ja um die Fremdsprache.
+    others: Lösungen der anderen Wörter derselben Seite. Ein Tippfehler zählt nicht,
+    wenn das Getippte eigentlich ein anderes Wort der Seite ist (Traum ≠ Baum).
     """
-    u = norm_answer(user)
-    if not u:
+    forms = _user_forms(user)
+    if not forms:
         return "wrong"
     variants = answer_variants(solution)
-    if u in variants:
+    if forms & variants:
         return "correct"
-    u2 = " ".join(_strip_leading(_strip_markers(u.split())))
-    if u2 in variants:
+    # Mehrere Bedeutungen auf einmal, z. B. "schwer, schwierig"
+    parts = [p for p in re.split(r"[,;/]", user) if p.strip()]
+    if len(parts) > 1 and all(_user_forms(p) & variants for p in parts):
         return "correct"
-    for v in variants:
-        if len(v) < 4:
+
+    # Tippfehler-Toleranz
+    match_dist = None
+    for f in forms:
+        cf = _core(f)
+        for v in variants:
+            cv = _core(v)
+            if len(cv) < 4:
+                continue
+            d = _levenshtein(cf, cv)
+            if d <= _allowed_typos(len(cv), lenient) and (match_dist is None or d < match_dist):
+                match_dist = d
+    if match_dist is None:
+        return "wrong"
+
+    # Ist das Getippte eigentlich ein anderes Wort derselben Seite?
+    own = norm_answer(solution)
+    for o in others:
+        if not isinstance(o, str) or norm_answer(o) == own:
             continue
-        if lenient:
-            # sehr kurze Wörter exakt (sonst Hand = Hund), längere großzügig
-            allowed = 0 if len(v) < 5 else (1 if len(v) < 8 else (2 if len(v) < 12 else 3))
-        else:
-            allowed = 2 if len(v) >= 9 else 1
-        if _levenshtein(u2, v) <= allowed or _levenshtein(u, v) <= allowed:
-            return "correct" if lenient else "almost"
-    return "wrong"
+        ov = answer_variants(o)
+        if forms & ov:
+            return "wrong"
+        d_o = _best_distance(forms, ov)
+        if d_o is not None and d_o < match_dist:
+            return "wrong"
+    return "correct" if lenient else "almost"
 
 
 def main_form(solution: str) -> str:
@@ -296,7 +379,7 @@ def main_form(solution: str) -> str:
     if not isinstance(solution, str):
         return ""
     s = re.sub(r"\([^)]*\)", " ", solution)
-    s = re.sub(r",\s*pl\.?\s+\S+", " ", s)
+    s = re.sub(r",\s*pl\.?\s+[^,;/]*", " ", s)  # ", pl scarves" / ", pl crime series" weg
     s = re.split(r"\s/\s|;", s)[0]
     if "/" in s and " " not in s.strip():
         s = s.split("/")[0]
@@ -315,6 +398,12 @@ try:
 except (TypeError, ValueError):
     _NEW_WIDTH_API = False
 WIDE = {"width": "stretch"} if _NEW_WIDTH_API else {"use_container_width": True}
+
+
+def js_json(obj) -> str:
+    """JSON sicher in <script> einbetten (auch wenn ein Wort "</script>" enthält)."""
+    return (json.dumps(obj, ensure_ascii=False)
+            .replace("</", "<\\/").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
 
 
 def embed_html(html: str, height: int):
@@ -395,8 +484,8 @@ def speak_button(text: str, lang: str, label: str = "🔊 Anhören"):
     """Button, der das Wort vom Browser vorlesen lässt."""
     if not text:
         return
-    t = json.dumps(main_form(text), ensure_ascii=False)
-    l = json.dumps(TTS_LANG.get(lang, "en-GB"))
+    t = js_json(main_form(text))
+    l = js_json(TTS_LANG.get(lang, "en-GB"))
     embed_html(f"""
 <button id="b" style="font-family:'Source Sans Pro',Arial,sans-serif;font-size:15px;padding:6px 14px;
   border:2px solid #1e88e5;background:white;color:#1565c0;border-radius:10px;cursor:pointer;">{label}</button>
@@ -601,9 +690,16 @@ def load_and_preprocess_df(path: Path) -> pd.DataFrame:
             df[req] = None
 
     df = df[["classe", "page", "de", "en"]].copy()
-    df["de"] = df["de"].astype(str).str.strip()
-    df["en"] = df["en"].astype(str).str.strip()
-    df = df.dropna(how="all", subset=["de", "en"])
+    # Text säubern; leere Felder (je nach pandas-Version NaN oder "nan") erkennen
+    def _clean(x):
+        if not isinstance(x, str):
+            return ""
+        x = x.strip()
+        return "" if x.lower() in ("nan", "none", "null") else x
+    df["de"] = df["de"].map(_clean)
+    df["en"] = df["en"].map(_clean)
+    # Zeilen ohne Deutsch ODER ohne Fremdsprache weglassen (z. B. Platzhalter "ChatGPT fragen")
+    df = df[(df["de"] != "") & (df["en"] != "")].reset_index(drop=True)
 
     for k in ["classe", "page"]:
         try:
@@ -807,8 +903,9 @@ def _feedback_banner(last, a_name, lang, foreign_field):
     q = html_escape(item[last["q_field"]])
     if res == "correct":
         note = ""
-        if user and norm_answer(user) not in answer_variants(item[last["a_field"]]) \
-                and " ".join(_strip_leading(_strip_markers(norm_answer(user).split()))) not in answer_variants(item[last["a_field"]]):
+        if user and last["a_field"] == "de" and not (_user_forms(user) & answer_variants(item[last["a_field"]])) \
+                and not all(_user_forms(p) & answer_variants(item[last["a_field"]])
+                            for p in re.split(r"[,;/]", user) if p.strip()):
             note = '<br><span class="fb-small">Kleine Rechtschreibfehler im Deutschen sind okay – so schreibt man es richtig.</span>'
         st.markdown(f'<div class="fb fb-ok">✅ Richtig! <b>{q}</b> = <b>{sol}</b>{note}</div>', unsafe_allow_html=True)
     elif res == "almost":
@@ -891,7 +988,8 @@ def game_input(df_view: pd.DataFrame, classe: str, page, lang: str = "EN", direc
         if not user.strip():
             st.warning("Bitte gib zuerst eine Antwort ein (oder klicke auf „Überspringen“).")
         else:
-            res = check_answer(user, item[a_field], lenient=(a_field == "de"))
+            others = [it[a_field] for it in items if it[a_field] != item[a_field]]
+            res = check_answer(user, item[a_field], lenient=(a_field == "de"), others=others)
             _register_result(s, item, user, res)
             s["last"] = {"item": item, "user": user, "result": res, "q_field": q_field, "a_field": a_field}
             s["index"] += 1
@@ -1182,11 +1280,10 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
             **WIDE, hide_index=True
         )
 
-    pairs_json = json.dumps(
-        [{"id": i, "de": it["de"], "en": it["en"], "say": main_form(it["en"])} for i, it in enumerate(items)],
-        ensure_ascii=False
+    pairs_json = js_json(
+        [{"id": i, "de": it["de"], "en": it["en"], "say": main_form(it["en"])} for i, it in enumerate(items)]
     )
-    tts_lang = json.dumps(TTS_LANG.get(lang, "en-GB"))
+    tts_lang = js_json(TTS_LANG.get(lang, "en-GB"))
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -1263,7 +1360,7 @@ body {{ position:relative; }}
 <script>
 const allPairs = {pairs_json};
 const TTS_LANG = {tts_lang};
-const LANG_TAG = {json.dumps(lang if lang in ("EN", "FR") else "EN")};
+const LANG_TAG = {js_json(lang if lang in ("EN", "FR") else "EN")};
 const nativeDnD = ('ondragstart' in document.createElement('div'));
 let TAP_MODE = true;
 let SOUND = true;
@@ -1807,7 +1904,7 @@ def _server_qr_data_uri(query: str):
 
 def _share_box(query: str):
     """Link + QR-Code zur aktuellen Übung (für Tafel/Beamer oder zum Teilen)."""
-    q = json.dumps(query)
+    q = js_json(query)
     qr_uri = _server_qr_data_uri(query)
     if qr_uri:
         st.markdown(f'<img src="{qr_uri}" alt="QR-Code" style="width:180px;background:white;border-radius:8px;">',

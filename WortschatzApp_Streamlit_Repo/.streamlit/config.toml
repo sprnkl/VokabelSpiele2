@@ -12,3 +12,7 @@ textColor = "#1f2340"
 [client]
 # Kein "Deploy"-Knopf / Entwickler-Menü für Schüler
 toolbarMode = "minimal"
+
+[browser]
+# Keine Nutzungsstatistik an Streamlit senden (Datenschutz an der Schule)
+gatherUsageStats = false
