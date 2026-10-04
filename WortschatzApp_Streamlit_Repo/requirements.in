@@ -1,0 +1,10 @@
+# Hauptpakete der App (Grundlage für requirements.txt, siehe dort)
+streamlit==1.65.0 ; python_version >= "3.10"
+streamlit==1.50.0 ; python_version < "3.10"
+pandas==3.0.6 ; python_version >= "3.11"
+pandas==2.3.3 ; python_version < "3.11"
+numpy==2.4.6 ; python_version >= "3.11"
+numpy==2.2.6 ; python_version == "3.10"
+numpy==2.0.2 ; python_version < "3.10"
+openpyxl==3.1.5
+segno==1.6.6
