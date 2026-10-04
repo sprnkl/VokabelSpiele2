@@ -327,21 +327,68 @@ def embed_html(html: str, height: int):
         st.components.v1.html(html, height=height, scrolling=True)
 
 
-def live_timer(timer: dict, nonce: str = ""):
-    """Sichtbar laufende Stoppuhr (läuft im Browser weiter, ohne Neuladen)."""
+AUTOSIZE_JS = """
+<script>
+// Höhe des eingebetteten Elements an den Inhalt anpassen (kein doppeltes Scrollen)
+function __fit() {
+  try {
+    const h = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    if (window.frameElement && h > 0) window.frameElement.style.height = h + 'px';
+  } catch (e) {}
+}
+window.addEventListener('load', __fit); window.addEventListener('resize', __fit);
+setTimeout(__fit, 50); setTimeout(__fit, 400);
+</script>"""
+
+
+def status_bar(timer: dict, nonce: str = "", progress=None, chips=()):
+    """Kompakte Statusleiste: Fortschritt, Info-Chips und laufende Stoppuhr in einer Zeile.
+
+    progress: None oder (text, Anteil 0..1); chips: Liste von (Text, Stil) mit Stil in
+    {"orange", "violet", "green", "red"}.
+    """
     now_ms = int(time.time() * 1000)
     cur = timer["elapsed_ms"] + (now_ms - timer["started_ms"] if timer["running"] else 0)
     running = "true" if timer["running"] else "false"
+    prog_html = ""
+    if progress is not None:
+        text, frac = progress
+        pct = max(0.0, min(1.0, float(frac))) * 100
+        prog_html = (f'<div class="prog"><div class="ptxt">{text}</div>'
+                     f'<div class="pbar"><div class="pfill" style="width:{pct:.1f}%"></div></div></div>')
+    chip_html = "".join(f'<span class="chip {style}">{html_escape(t)}</span>' for t, style in chips)
     embed_html(f"""
-<div id="t" style="font-family:'Source Sans Pro',Arial,sans-serif;font-size:20px;font-weight:700;
-  color:#1565c0;background:#e3f2fd;border-radius:999px;padding:6px 14px;display:inline-block;">⏱ 00:00</div>
+<style>
+body {{ margin:0; font-family:'Source Sans Pro','Segoe UI',Arial,sans-serif; background:transparent; }}
+.bar {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:2px 1px 4px 1px; }}
+.prog {{ flex: 1 1 220px; min-width: 180px; }}
+.ptxt {{ font-size:14px; color:#1f2340; margin-bottom:5px; }}
+.ptxt b {{ color:#5e35b1; }}
+.pbar {{ height:10px; background:#e3e8f4; border-radius:999px; overflow:hidden; }}
+.pfill {{ height:100%; background:linear-gradient(90deg,#1e88e5,#5e35b1); border-radius:999px; transition:width .3s; }}
+.chip {{ font-weight:700; font-size:15px; border-radius:999px; padding:6px 12px; white-space:nowrap; }}
+.orange {{ background:#fff3e0; color:#e65100; }}
+.violet {{ background:#ede7f6; color:#4527a0; }}
+.green {{ background:#e8f5e9; color:#1b5e20; }}
+.red {{ background:#ffebee; color:#b71c1c; }}
+.timer {{ background:#e3f2fd; color:#1565c0; }}
+</style>
+<div class="bar">{prog_html}{chip_html}<span class="chip timer" id="t">⏱ 00:00</span></div>
 <script>
 // {nonce}
 const base = {cur}; const running = {running}; const t0 = Date.now();
 function f(ms) {{ const s = Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0'); }}
 function upd() {{ document.getElementById('t').textContent = '⏱ ' + f(base + (running ? Date.now() - t0 : 0)); }}
 upd(); if (running) setInterval(upd, 250);
-</script>""", height=48)
+</script>{AUTOSIZE_JS}""", height=48)
+
+
+def keyed_container(key: str, border: bool = False):
+    """Container mit festem Namen (für gezieltes Styling); ältere Streamlit-Versionen ohne Namen."""
+    try:
+        return st.container(key=key, border=border)
+    except TypeError:
+        return st.container(border=border)
 
 
 def speak_button(text: str, lang: str, label: str = "🔊 Anhören"):
@@ -373,7 +420,7 @@ def focus_input(aria_label: str, nonce: str):
 setTimeout(() => {{
   try {{
     const el = window.parent.document.querySelector('input[aria-label="{aria_label}"]');
-    if (el) el.focus();
+    if (el) el.focus({{ preventScroll: true }});
   }} catch (e) {{}}
 }}, 200);
 </script>""", height=0)
@@ -402,6 +449,34 @@ HANGMAN_PICS = [
     " +---+\n O   |\n/|\\  |\n/    |\n   ===",
     " +---+\n O   |\n/|\\  |\n/ \\  |\n   ===",
 ]
+
+def hangman_svg(fails: int, lost: bool = False, won: bool = False) -> str:
+    """Gezeichneter Galgen; Teile erscheinen mit jedem Fehler (max. 6)."""
+    fig = "#c62828" if lost else ("#2e7d32" if won else "#5e35b1")
+    parts = [
+        '<circle cx="128" cy="62" r="16" />',                 # Kopf
+        '<line x1="128" y1="78" x2="128" y2="128" />',        # Körper
+        '<line x1="128" y1="90" x2="106" y2="112" />',        # linker Arm
+        '<line x1="128" y1="90" x2="150" y2="112" />',        # rechter Arm
+        '<line x1="128" y1="128" x2="110" y2="160" />',       # linkes Bein
+        '<line x1="128" y1="128" x2="146" y2="160" />',       # rechtes Bein
+    ]
+    body = "".join(parts[:max(0, min(fails, 6))])
+    face = ""
+    if won:
+        face = '<path d="M121 66 q7 6 14 0" stroke-width="2.5" />'
+    elif lost:
+        face = ('<line x1="121" y1="56" x2="125" y2="60" stroke-width="2.5" /><line x1="125" y1="56" x2="121" y2="60" stroke-width="2.5" />'
+                '<line x1="131" y1="56" x2="135" y2="60" stroke-width="2.5" /><line x1="135" y1="56" x2="131" y2="60" stroke-width="2.5" />')
+    return f"""<div class="hang-svg"><svg viewBox="0 0 200 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Galgen, {fails} von 6 Fehlern">
+  <g stroke="#8d6e63" stroke-width="6" stroke-linecap="round" fill="none">
+    <line x1="20" y1="180" x2="120" y2="180" /><line x1="50" y1="180" x2="50" y2="14" />
+    <line x1="48" y1="14" x2="132" y2="14" /><line x1="50" y1="44" x2="80" y2="14" />
+  </g>
+  <line x1="128" y1="14" x2="128" y2="46" stroke="#a1887f" stroke-width="3" />
+  <g stroke="{fig}" stroke-width="5" stroke-linecap="round" fill="none">{body}{face if fails >= 1 else ''}</g>
+</svg></div>"""
+
 
 # ============================ CSV-Erkennung & Laden ============================
 
@@ -656,13 +731,11 @@ def _stop_timer(t):
 def _status_row(s):
     n = len(s["order"])
     done = min(s["index"], n)
-    c1, c2, c3 = st.columns([4, 1.3, 1.3])
-    with c1:
-        st.progress(done / n if n else 0.0, text=f"**{s['round_label']}** · Wort {min(done + 1, n)} von {n}")
-    with c2:
-        st.markdown(f'<div class="streak-pill">🔥 Serie: {s["streak"]}</div>', unsafe_allow_html=True)
-    with c3:
-        live_timer(s["timer"], nonce=f"{s['index']}")
+    status_bar(
+        s["timer"], nonce=f"{s['index']}",
+        progress=(f"<b>{html_escape(s['round_label'])}</b> · Wort {min(done + 1, n)} von {n}", done / n if n else 0),
+        chips=[(f"🔥 Serie: {s['streak']}", "orange"), (f"✅ {s['counts']['correct']}", "green")],
+    )
 
 
 def _history_df(s, q_field, a_field, q_name, a_name):
@@ -789,21 +862,30 @@ def game_input(df_view: pd.DataFrame, classe: str, page, lang: str = "EN", direc
         speak_button(item["en"], lang, label=f"🔊 {foreign} anhören")
 
     input_label = f"Deine Antwort auf {a_name}"
-    with st.form(key=f"input_form_{state_key}_{i}", clear_on_submit=True):
-        user = st.text_input(input_label, key=f"user_{state_key}_{i}", placeholder="Hier tippen und Enter drücken …")
-        submitted = st.form_submit_button("✔ Prüfen (Enter)", type="primary")
-    focus_input(input_label, nonce=f"{state_key}_{i}")
+    with keyed_container("answer_box", border=True):
+        with st.form(key=f"input_form_{state_key}_{i}", clear_on_submit=True, border=False):
+            user = st.text_input(input_label, key=f"user_{state_key}_{i}", placeholder="Hier tippen und Enter drücken …")
+            # Enter löst den ersten Button aus (= Prüfen)
+            b1, b2, b3 = st.columns([1.2, 1, 1])
+            with b1:
+                submitted = st.form_submit_button("✔ Prüfen", type="primary", key=f"{state_key}_check_{i}", **WIDE)
+            with b2:
+                skipped = st.form_submit_button("⏭️ Überspringen", key=f"{state_key}_skip_{i}", **WIDE)
+            with b3:
+                show_sol = st.form_submit_button("💡 Lösung zeigen", key=f"{state_key}_showsol_{i}", **WIDE)
+    if s["history"]:  # erst nach der ersten Antwort automatisch ins Feld (sonst springt die Seite)
+        focus_input(input_label, nonce=f"{state_key}_{i}")
 
-    cskip, csol, _ = st.columns([1, 1, 2])
-    with cskip:
-        if st.button("⏭️ Überspringen", key=f"{state_key}_skip_{i}"):
-            _register_result(s, item, "", "skipped")
-            s["last"] = {"item": item, "user": "", "result": "skipped", "q_field": q_field, "a_field": a_field}
-            s["index"] += 1
-            st.rerun()
-    with csol:
-        if st.button("💡 Lösung zeigen", key=f"{state_key}_showsol_{i}"):
-            st.info(f"Lösung: {item[q_field]} — {item[a_field]}")
+    if skipped:
+        _register_result(s, item, "", "skipped")
+        s["last"] = {"item": item, "user": "", "result": "skipped", "q_field": q_field, "a_field": a_field}
+        s["index"] += 1
+        if s["index"] >= len(s["order"]):
+            _stop_timer(s["timer"])
+        st.rerun()
+    if show_sol:
+        st.info(f"Lösung: {item[q_field]} — {item[a_field]}")
+        submitted = False
 
     if submitted:
         if not user.strip():
@@ -977,40 +1059,61 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
     solution, hint, t = state["solution"], state["hint"], state["timer"]
     max_fails = len(HANGMAN_PICS) - 1
 
-    c1, c2, c3 = st.columns([4, 1.3, 1.3])
-    with c1:
-        st.markdown(f"Fehler: **{state['fails']} von {max_fails}** · Gelöste Wörter: **{state.get('score', 0)}**")
-    with c2:
-        st.markdown(f'<div class="streak-pill">🏆 {state.get("score", 0)}</div>', unsafe_allow_html=True)
-    with c3:
-        live_timer(t, nonce=f"{state['idx']}_{len(state['guessed'])}_{state['fails']}")
+    status_bar(
+        t, nonce=f"{state['idx']}_{len(state['guessed'])}_{state['fails']}",
+        chips=[(f"❤️ Fehler: {state['fails']} von {max_fails}", "red" if state["fails"] else "violet"),
+               (f"🏆 Gelöst: {state.get('score', 0)}", "orange")],
+    )
 
-    opt1, opt2, opt3 = st.columns(3)
-    with opt1:
-        state["show_hint"] = st.checkbox("Deutschen Hinweis zeigen", value=state.get("show_hint", False), key=f"{key}_showhint")
-    with opt2:
-        if st.button("💡 Lösung zeigen", key=f"{key}_showsol"):
-            st.info(f"Lösung: {state['full']}")
-    with opt3:
-        if st.button("⏭️ Anderes Wort", key=f"{key}_newword"):
-            new_word(); st.rerun()
+    show_sol_now = False
+    with keyed_container("hang_opts"):
+        opt1, opt2, opt3 = st.columns([1.4, 1, 1])
+        with opt1:
+            state["show_hint"] = st.checkbox("🇩🇪 Hinweis zeigen", value=state.get("show_hint", False), key=f"{key}_showhint")
+        with opt2:
+            if st.button("💡 Lösung", key=f"{key}_showsol", **WIDE):
+                show_sol_now = True
+        with opt3:
+            if st.button("⏭️ Anderes Wort", key=f"{key}_newword", **WIDE):
+                new_word(); st.rerun()
+    if show_sol_now:
+        st.info(f"Lösung: {state['full']}")
 
     if state["show_hint"]:
         st.markdown(f'<div class="fb fb-hint">🇩🇪 Hinweis: <b>{html_escape(hint)}</b></div>', unsafe_allow_html=True)
 
-    cA, cB = st.columns([1, 2])
+    playing = not state["solved"] and state["fails"] < max_fails
+    cA, cB = st.columns([1, 1.7])
     with cA:
-        st.text(HANGMAN_PICS[min(state["fails"], max_fails)])
+        st.markdown(hangman_svg(state["fails"], lost=(not state["solved"] and not playing),
+                                won=state["solved"]), unsafe_allow_html=True)
     with cB:
         display_word = " ".join(c if _is_revealed(c, state["guessed"]) else "_" for c in solution)
         st.markdown(f'<div class="hang-word">{html_escape(display_word)}</div>', unsafe_allow_html=True)
-        st.caption(f"Gesuchtes Wort auf {foreign}")
+        st.caption(f"Gesuchtes Wort auf {foreign} · tippe Buchstaben an")
+
+        if playing:
+            sol_letters = {_base_letter(c) for c in solution if c.isalpha()}
+            with keyed_container("hang_kb"):
+                alphabet = list("abcdefghijklmnopqrstuvwxyz")
+                for chunk in [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]:
+                    cols = st.columns(7)
+                    for letter, col in zip(chunk, cols):
+                        with col:
+                            if st.button(letter.upper(), key=f"{key}_btn_{letter}",
+                                         disabled=(letter in state["guessed"]), **WIDE):
+                                state["guessed"].add(letter)
+                                if letter not in sol_letters:
+                                    state["fails"] += 1
+                                state["msg"] = None
+                                if all(_is_revealed(c, state["guessed"]) for c in solution):
+                                    _mark_solved()
+                                st.rerun()
 
         # Formular immer anzeigen (nach dem Lösen nur ausgegraut) – stabiler über alle Streamlit-Versionen
-        playing = not state["solved"] and state["fails"] < max_fails
         with st.form(key=f"hang_form_{key}", clear_on_submit=True):
-            full_guess = st.text_input(f"Ganzes Wort eintippen ({foreign}):", key=f"{key}_full", disabled=not playing)
-            submitted = st.form_submit_button("✔ Prüfen (Enter)", disabled=not playing)
+            full_guess = st.text_input(f"Oder ganzes Wort eintippen ({foreign}):", key=f"{key}_full", disabled=not playing)
+            submitted = st.form_submit_button("✔ Prüfen", disabled=not playing)
             if submitted and playing and full_guess.strip():
                 res = check_answer(full_guess, solution)
                 if res != "correct":
@@ -1032,23 +1135,7 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
             f' · ⏱ {fmt_ms(t["elapsed_ms"])[:5]}</div>', unsafe_allow_html=True)
         speak_button(state["full"], lang, label=f"🔊 {foreign} anhören")
 
-    if not state["solved"] and state["fails"] < max_fails:
-        alphabet = list("abcdefghijklmnopqrstuvwxyz")
-        sol_letters = {_base_letter(c) for c in solution if c.isalpha()}
-        for chunk in [alphabet[i:i+7] for i in range(0, len(alphabet), 7)]:
-            cols = st.columns(7)
-            for letter, col in zip(chunk, cols):
-                with col:
-                    if st.button(letter.upper(), key=f"{key}_btn_{letter}", disabled=(letter in state["guessed"]),
-                                 **WIDE):
-                        state["guessed"].add(letter)
-                        if letter not in sol_letters:
-                            state["fails"] += 1
-                        state["msg"] = None
-                        if all(_is_revealed(c, state["guessed"]) for c in solution):
-                            _mark_solved()
-                        st.rerun()
-    elif not state["solved"]:
+    if not playing and not state["solved"]:
         _stop_timer(t)
         st.markdown(
             f'<div class="fb fb-wrong">😵 Leider verloren. Das Wort war: <b>{html_escape(state["full"])}</b>'
@@ -1056,7 +1143,7 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
         speak_button(state["full"], lang, label=f"🔊 {foreign} anhören")
         if st.button("➡️ Nächstes Wort", key=f"{key}_nextword_fail", type="primary"):
             next_word(); st.rerun()
-    else:
+    elif state["solved"]:
         if st.button("➡️ Nächstes Wort", key=f"{key}_nextword", type="primary"):
             next_word(); st.rerun()
 
@@ -1129,7 +1216,14 @@ body {{
   touch-action: manipulation; cursor:pointer; transition: transform .08s ease, box-shadow .15s ease;
   -webkit-user-drag: element; box-shadow: 0 1px 3px rgba(0,0,0,.08);
 }}
-.card.fx {{ border-color:#b39ddb; }}
+.card.de {{ border-color:#64b5f6; }}
+.card.fx {{ border-color:#b39ddb; background:#fbf9ff; }}
+.card .tag {{
+  display:inline-block; font-size:10px; font-weight:800; letter-spacing:.05em; border-radius:6px;
+  padding:1px 5px; margin-bottom:4px; color:white; background:#64b5f6;
+}}
+.card.fx .tag {{ background:#9575cd; }}
+.card .txt {{ display:block; }}
 .card:hover {{ box-shadow: 0 3px 8px rgba(30,136,229,.25); }}
 .card:active {{ transform: scale(0.97); }}
 .correct {{ background:#e8f5e9 !important; border-color:#2e7d32 !important; color:#1b5e20; cursor:default; opacity:.75; }}
@@ -1141,8 +1235,10 @@ body {{
   75% {{ transform: translateX(5px); }}
 }}
 #overlay {{
-  display:none; position:fixed; inset:0; background:rgba(30,20,60,.55); align-items:center; justify-content:center; z-index:10;
+  display:none; position:absolute; inset:0; background:rgba(30,20,60,.55); align-items:flex-start;
+  justify-content:center; z-index:10; padding-top:30px;
 }}
+body {{ position:relative; }}
 #overlay .box {{
   background:white; border-radius:18px; padding:26px 30px; text-align:center; max-width:90%;
   box-shadow:0 10px 30px rgba(0,0,0,.3); animation: pop .35s ease;
@@ -1167,6 +1263,7 @@ body {{
 <script>
 const allPairs = {pairs_json};
 const TTS_LANG = {tts_lang};
+const LANG_TAG = {json.dumps(lang if lang in ("EN", "FR") else "EN")};
 const nativeDnD = ('ondragstart' in document.createElement('div'));
 let TAP_MODE = true;
 let SOUND = true;
@@ -1217,8 +1314,10 @@ function onMatch(a, b) {{
 
 function createCard(text, pid, isForeign) {{
   const c = document.createElement('div');
-  c.className = 'card' + (isForeign ? ' fx' : '');
-  c.textContent = text;
+  c.className = 'card' + (isForeign ? ' fx' : ' de');
+  const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = isForeign ? LANG_TAG : 'DE';
+  const txt = document.createElement('span'); txt.className = 'txt'; txt.textContent = text;
+  c.appendChild(tag); c.appendChild(txt);
   c.setAttribute('data-pid', String(pid));
   c.setAttribute('role', 'button');
   c.setAttribute('tabindex', '0');
@@ -1302,6 +1401,7 @@ function layoutRound() {{
   shuffleArray(cards);
   for (const c of cards) box.appendChild(createCard(c.text, c.pid, c.fx));
   updateProgress();
+  setTimeout(() => {{ try {{ __fit(); }} catch (e) {{}} }}, 30);
 }}
 
 function newGame() {{
@@ -1318,6 +1418,7 @@ function showOverlay(title, text, btnText, onClick) {{
   const b = document.getElementById('ovBtn');
   b.textContent = btnText; b.onclick = onClick;
   document.getElementById('overlay').style.display = 'flex';
+  try {{ window.frameElement.scrollIntoView({{ behavior: 'smooth', block: 'start' }}); }} catch (e) {{}}
 }}
 
 function checkWin() {{
@@ -1351,6 +1452,7 @@ document.getElementById('soundBtn').addEventListener('click', () => {{
 setModeLabel();
 newGame();
 </script>
+{AUTOSIZE_JS}
 </body>
 </html>"""
 
@@ -1399,13 +1501,8 @@ def game_irregulars_assign():
     st.caption("1️⃣ Tippe links auf ein Wort. 2️⃣ Tippe rechts auf die passende Form. "
                "Slash-Formen (z. B. was/were) werden akzeptiert.")
 
-    c1, c2, c3 = st.columns([2, 1.3, 1.3])
-    with c1:
-        st.markdown(f"Punkte gesamt: **{st.session_state.verbs_points_total}**")
-    with c2:
-        st.markdown(f'<div class="streak-pill">🏆 {st.session_state.verbs_points_total}</div>', unsafe_allow_html=True)
-    with c3:
-        live_timer(rnd_state["timer"], nonce=str(rnd_state["start_ts"]))
+    status_bar(rnd_state["timer"], nonce=str(rnd_state["start_ts"]),
+               chips=[(f"🏆 Punkte: {st.session_state.verbs_points_total}", "orange")])
 
     if st.session_state.get("verbs_msg"):
         kind, text = st.session_state.verbs_msg
@@ -1580,21 +1677,112 @@ section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
 }
 section[data-testid="stSidebar"] input { background: white; border-radius: 8px; }
 
+/* ---------- Layout 2.0 ---------- */
+
+/* Grundschrift etwas größer, Buttons höher (leichter zu treffen) */
+html, body, [data-testid="stAppViewContainer"] { font-size: 17px; }
+div[data-testid="stButton"] button, div[data-testid="stFormSubmitButton"] button { min-height: 2.9rem; border-radius: 12px; }
+.vocab-word { font-size: 2.1rem; }
+
+/* Kein Deploy-Knopf / Entwickler-Menü */
+[data-testid="stAppDeployButton"], [data-testid="stMainMenu"], #MainMenu { display: none !important; }
+
+/* Kopfbereich schlanker */
+.app-hero { padding: 14px 20px; margin-bottom: 14px; }
+
+/* Spiel-Karten als Raster: PC 3 nebeneinander, Handy 2 */
+.st-key-game_grid [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 12px !important; }
+.st-key-game_grid [data-testid="stColumn"], .st-key-game_grid [data-testid="column"] {
+  flex: 1 1 calc(33.333% - 12px) !important; min-width: calc(33.333% - 12px) !important; width: auto !important;
+}
+.st-key-game_grid button { min-height: 5.4rem !important; border-radius: 16px !important; padding: 10px 12px !important;
+  white-space: normal !important; transition: transform .08s ease, box-shadow .15s ease; }
+.st-key-game_grid button:hover { transform: translateY(-2px); }
+.st-key-game_grid button p { font-size: 1.08rem !important; font-weight: 700 !important; line-height: 1.25; }
+/* Titel und Beschreibung umbrechen statt abschneiden */
+.st-key-game_grid button, .st-key-game_grid button * {
+  white-space: normal !important; overflow: visible !important; text-overflow: clip !important; max-width: 100%;
+}
+.sum-line { margin-bottom: 2px; }
+
+/* Kompakte Leiste über dem Spiel */
+.sum-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 2.9rem; }
+.sum-chip { background: #eef3fd; color: #1f2340; border-radius: 999px; padding: 6px 12px; font-weight: 600; font-size: .95rem; }
+.sum-game { background: linear-gradient(135deg, #1e88e5 0%, #5e35b1 100%); color: white; }
+
+/* Hangman */
+.hang-svg { max-width: 230px; margin: 0 auto; }
+.hang-svg svg { width: 100%; height: auto; display: block; }
+.st-key-hang_kb [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 6px !important; }
+.st-key-hang_kb [data-testid="stColumn"], .st-key-hang_kb [data-testid="column"] {
+  min-width: 0 !important; flex: 1 1 0 !important; width: auto !important;
+}
+.st-key-hang_kb button { min-height: 2.6rem !important; padding: 0 !important; font-weight: 700; }
+.st-key-hang_kb [data-testid="stVerticalBlock"] { gap: 6px !important; }
+
+/* Hangman-Optionen: Buttons auch auf dem Handy nebeneinander */
 @media (max-width: 640px) {
-  .app-hero h1 { font-size: 1.5rem; }
-  .block-container { padding-top: 3rem; }
-  .vocab-word { font-size: 1.5rem; }
+  .st-key-hang_opts [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 8px !important; }
+  .st-key-hang_opts [data-testid="stColumn"]:first-child, .st-key-hang_opts [data-testid="column"]:first-child {
+    flex: 1 1 100% !important; min-width: 100% !important; }
+  .st-key-hang_opts [data-testid="stColumn"], .st-key-hang_opts [data-testid="column"] {
+    flex: 1 1 calc(50% - 8px) !important; min-width: calc(50% - 8px) !important; }
+  .st-key-summary_bar [data-testid="stHorizontalBlock"] { gap: 8px !important; }
+  .st-key-summary_bar .sum-line { margin-bottom: 10px; }
+  /* Eingabe: Prüfen über volle Breite, Überspringen + Lösung nebeneinander */
+  .st-key-answer_box [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 8px !important; }
+  .st-key-answer_box [data-testid="stColumn"], .st-key-answer_box [data-testid="column"] {
+    flex: 1 1 calc(50% - 8px) !important; min-width: calc(50% - 8px) !important; }
+  .st-key-answer_box [data-testid="stColumn"]:first-child, .st-key-answer_box [data-testid="column"]:first-child {
+    flex: 1 1 100% !important; min-width: 100% !important; }
+}
+
+/* Antwortfeld + Buttons als eine Einheit */
+.st-key-answer_box { background: #fbfcff; }
+
+/* Seitenleiste: Schrift immer dunkel (auch wenn das Gerät im Dunkelmodus ist) */
+section[data-testid="stSidebar"], section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] summary { color: #1f2340; }
+section[data-testid="stSidebar"] .sb-head, section[data-testid="stSidebar"] .sb-head * { color: white; }
+section[data-testid="stSidebar"] .sb-sub { color: #5e35b1; }
+
+@media (max-width: 640px) {
+  .app-hero h1 { font-size: 1.4rem; }
+  .app-hero p { font-size: .92rem; }
+  .block-container { padding-top: 3rem; padding-left: .8rem; padding-right: .8rem; }
+  .vocab-word { font-size: 1.7rem; }
   .hang-word { font-size: 1.5rem; }
+  .hang-svg { max-width: 150px; }
+  .st-key-game_grid [data-testid="stColumn"], .st-key-game_grid [data-testid="column"] {
+    flex: 1 1 calc(50% - 12px) !important; min-width: calc(50% - 12px) !important;
+  }
+  .st-key-game_grid button { min-height: 5rem !important; }
+  .st-key-game_grid button p { font-size: 1rem !important; }
+  .st-key-hang_kb button p { font-size: .95rem !important; }
 }
 </style>
 """
 
 
-def _step_title(num: int, text: str):
-    st.markdown(
-        f'<div class="step-title"><span class="step-badge">{num}</span>{text}</div>',
-        unsafe_allow_html=True,
-    )
+def _step_title(num, text: str):
+    badge = f'<span class="step-badge">{num}</span>' if num else ""
+    st.markdown(f'<div class="step-title">{badge}{text}</div>', unsafe_allow_html=True)
+
+
+def _tiles_css(games) -> str:
+    """CSS für die Spiel-Karten: eigene Farbe + Beschreibung je Spiel."""
+    rules = []
+    for code, icon, title, desc, color in games:
+        k = f".st-key-game_tile_{code}"
+        d = desc.replace('"', "'")
+        rules.append(f"""
+{k} button {{ border: 2px solid {color} !important; background: white !important; color: #1f2340 !important; }}
+{k} button:hover {{ background: {color}14 !important; }}
+{k} button p::after {{ content: "{d}"; display: block; font-size: .8rem; font-weight: 400; opacity: .8; margin-top: 4px; }}
+{k} button[kind="primary"], {k} button[data-testid="stBaseButton-primary"], {k} button[data-testid="baseButton-primary"] {{
+  background: {color} !important; color: white !important; box-shadow: 0 4px 12px {color}55;
+}}""")
+    return "<style>" + "".join(rules) + "</style>"
 
 
 COURSE_CODES = {"e": "e", "g": "g", "französisch": "f", "": ""}
@@ -1654,11 +1842,9 @@ def main():
     BASE_DIR = Path(__file__).parent
 
     st.markdown(APP_CSS, unsafe_allow_html=True)
-    st.markdown(
-        '<div class="app-hero"><h1>📚 Wortschatz-Spiele</h1>'
-        '<p>Wähle deine Klasse und Seite – dann such dir ein Spiel aus!</p></div>',
-        unsafe_allow_html=True,
-    )
+    hero_sub = ('<p>Wähle deine Klasse und Seite – dann such dir ein Spiel aus!</p>'
+                if st.session_state.get("setup_open", "klasse" not in st.query_params) else "")
+    st.markdown(f'<div class="app-hero"><h1>📚 Wortschatz-Spiele</h1>{hero_sub}</div>', unsafe_allow_html=True)
 
     # Sidebar
     with st.sidebar:
@@ -1707,46 +1893,72 @@ def main():
         label_to_code[lbl] = code
         code_to_label[code] = lbl
 
-    # Direktlink-Parameter nur beim ersten Laden übernehmen
-    if "qp_init" not in st.session_state:
+    # Auswahl merkt sich die App selbst (damit Schritt 1+2 zugeklappt werden können).
+    # Beim ersten Laden werden Direktlink-Parameter übernommen.
+    if "sel" not in st.session_state:
         qp = st.query_params
-        st.session_state.qp_init = {
-            "label": code_to_label.get(str(qp.get("klasse", "")).lower()),
-            "seite": qp.get("seite"),
-            "bis": qp.get("bis"),
+        qp_label = code_to_label.get(str(qp.get("klasse", "")).lower())
+        st.session_state.sel = {
+            "label": qp_label or unique_labels[0],
+            "page": qp.get("seite"),
+            "end": qp.get("bis"),
+            "multi": bool(qp.get("bis")),
         }
         if qp.get("spiel"):
             st.session_state.game_choice = qp.get("spiel")
-    qp_init = st.session_state.qp_init
+        # Mit Direktlink direkt ins Spiel, sonst erst auswählen
+        st.session_state.setup_open = qp_label is None
+    sel = st.session_state.sel
+    if sel["label"] not in unique_labels:
+        sel["label"] = unique_labels[0]
 
-    # ---------- Schritt 1: Klasse/Kurs + Seite ----------
-    with st.container(border=True):
-        _step_title(1, "Klasse und Seite wählen")
-        col_k, col_p, col_p2 = st.columns([3, 1.4, 1.4])
-        with col_k:
-            label_index = unique_labels.index(qp_init["label"]) if qp_init["label"] in unique_labels else 0
-            selected_label = st.selectbox("Klasse/Kurs", unique_labels, index=label_index)
+    def _index_of(val, options):
+        try:
+            return options.index(int(val))
+        except (TypeError, ValueError):
+            return 0
 
-        filtered_df = df_info[df_info["label"] == selected_label].reset_index(drop=True)
-        unique_pages = [int(p) for p in sorted(filtered_df["page"].unique())]
+    # Spiele (Code, Symbol, Titel, Beschreibung, Farbe)
+    def _games_for(is_fr: bool, lname: str):
+        g = [
+            ("input", "✍️", "Eingabe", "Übersetzung selbst tippen", "#1e88e5"),
+            ("mc", "🎯", "Multiple Choice", "Aus 4 Antworten wählen", "#00897b"),
+            ("memory", "🃏", "Wörter Memory", "Passende Paare finden", "#43a047"),
+            ("hangman", "🪢", "Hangman", "Wort Buchstabe für Buchstabe raten", "#f57c00"),
+        ]
+        if not is_fr:
+            g.append(("irregulars", "🔀", "Unregelmäßige Verben", "Verbformen zuordnen", "#8e24aa"))
+        return g
 
-        def _qp_page_index(val, pages):
-            try:
-                return pages.index(int(val)) if selected_label == qp_init["label"] else 0
-            except (TypeError, ValueError):
-                return 0
+    setup_open = st.session_state.get("setup_open", True)
 
-        with col_p:
-            selected_page = st.selectbox("Seite im Buch", unique_pages,
-                                         index=_qp_page_index(qp_init["seite"], unique_pages))
-        multi = st.checkbox("📚 Mehrere Seiten zusammen üben (z. B. für einen Vokabeltest)",
-                            value=bool(qp_init["bis"]) and selected_label == qp_init["label"])
-        end_page = selected_page
-        if multi:
-            later_pages = [p for p in unique_pages if p >= selected_page]
-            with col_p2:
-                end_page = st.selectbox("bis Seite", later_pages,
-                                        index=_qp_page_index(qp_init["bis"], later_pages))
+    if setup_open:
+        # ---------- Schritt 1: Klasse/Kurs + Seite ----------
+        with st.container(border=True):
+            _step_title(1, "Klasse und Seite wählen")
+            col_k, col_p, col_p2 = st.columns([3, 1.4, 1.4])
+            with col_k:
+                sel["label"] = st.selectbox("Klasse/Kurs", unique_labels, index=unique_labels.index(sel["label"]))
+            pages_tmp = [int(p) for p in sorted(df_info[df_info["label"] == sel["label"]]["page"].unique())]
+            with col_p:
+                sel["page"] = st.selectbox("Seite im Buch", pages_tmp, index=_index_of(sel["page"], pages_tmp))
+            sel["multi"] = st.checkbox("📚 Mehrere Seiten zusammen üben (z. B. für einen Vokabeltest)",
+                                       value=bool(sel["multi"]))
+            if sel["multi"]:
+                later_tmp = [p for p in pages_tmp if p >= int(sel["page"])]
+                with col_p2:
+                    sel["end"] = st.selectbox("bis Seite", later_tmp, index=_index_of(sel["end"], later_tmp))
+
+    selected_label = sel["label"]
+    filtered_df = df_info[df_info["label"] == selected_label].reset_index(drop=True)
+    unique_pages = [int(p) for p in sorted(filtered_df["page"].unique())]
+    selected_page = unique_pages[_index_of(sel["page"], unique_pages)]
+    sel["page"] = selected_page
+    end_page = selected_page
+    if sel["multi"]:
+        later_pages = [p for p in unique_pages if p >= selected_page]
+        end_page = later_pages[_index_of(sel["end"], later_pages)]
+        sel["end"] = end_page
 
     sel_rows = filtered_df[(filtered_df["page"] >= selected_page) & (filtered_df["page"] <= end_page)]
     sel_rows = sel_rows.sort_values("page")
@@ -1765,40 +1977,46 @@ def main():
     lang = "FR" if is_french else "EN"
     lang_name = LANG_NAMES[lang]
 
-    # ---------- Schritt 2: Spiel wählen (große Kacheln) ----------
-    games = [
-        ("input", f"✍️ Eingabe ({lang_name})", "Schreibe die Übersetzung selbst."),
-        ("mc", "🎯 Multiple Choice", "Wähle aus 4 Antworten die richtige."),
-        ("memory", "🃏 Wörter Memory", "Finde die passenden Wortpaare."),
-        ("hangman", f"🪢 Hangman ({lang_name})", "Errate das Wort Buchstabe für Buchstabe."),
-    ]
-    if not is_french:
-        games.append(("irregulars", "🔀 Unregelmäßige Verben", "Ordne die Verbformen richtig zu."))
+    games = _games_for(is_french, lang_name)
     game_codes = [g[0] for g in games]
     if st.session_state.get("game_choice") not in game_codes:
         st.session_state.game_choice = "input"
-
-    with st.container(border=True):
-        _step_title(2, "Spiel auswählen")
-        for row_start in range(0, len(games), 2):
-            cols = st.columns(2)
-            for (code, title, desc), col in zip(games[row_start:row_start + 2], cols):
-                with col:
-                    is_active = st.session_state.game_choice == code
-                    label = f"✅ {title}" if is_active else title
-                    if st.button(
-                        label,
-                        key=f"game_tile_{code}",
-                        type="primary" if is_active else "secondary",
-                        **WIDE,
-                    ):
-                        if not is_active:
-                            st.session_state.game_choice = code
-                            st.rerun()
-                    st.markdown(f'<div class="game-tile-desc">{desc}</div>', unsafe_allow_html=True)
-
     game_choice = st.session_state.game_choice
-    game_title = next(t for c, t, _ in games if c == game_choice)
+    g_icon, g_title = next((g[1], g[2]) for g in games if g[0] == game_choice)
+    game_title = f"{g_icon} {g_title}" + (f" ({lang_name})" if game_choice in ("input", "hangman") else "")
+
+    # Farben + Beschreibungen der Spiel-Karten
+    st.markdown(_tiles_css(games), unsafe_allow_html=True)
+
+    if setup_open:
+        # ---------- Schritt 2: Spiel wählen (Karten) ----------
+        with st.container(border=True):
+            _step_title(2, "Spiel auswählen")
+            with keyed_container("game_grid"):
+                cols = st.columns(len(games))
+                for (code, icon, title, desc, color), col in zip(games, cols):
+                    with col:
+                        is_active = game_choice == code
+                        if st.button(f"{icon} {title}", key=f"game_tile_{code}",
+                                     type="primary" if is_active else "secondary", **WIDE):
+                            st.session_state.game_choice = code
+                            st.session_state.setup_open = False
+                            st.rerun()
+            st.caption("Tippe auf ein Spiel – dann geht's los.")
+    else:
+        # ---------- Kompakte Leiste statt Schritt 1+2 ----------
+        with keyed_container("summary_bar", border=True):
+            c_info, c_btn = st.columns([4, 1.3])
+            with c_info:
+                st.markdown(
+                    f'<div class="sum-line"><span class="sum-chip">📚 {html_escape(selected_label)}</span>'
+                    f'<span class="sum-chip">📖 {html_escape(page_text)}</span>'
+                    f'<span class="sum-chip sum-game">{html_escape(game_title)}</span></div>',
+                    unsafe_allow_html=True)
+            with c_btn:
+                if st.button("✏️ Ändern", key="open_setup", **WIDE):
+                    st.session_state.setup_open = True
+                    st.rerun()
 
     # Adresszeile aktuell halten (für Direktlinks)
     desired_qp = {"klasse": label_to_code.get(selected_label, ""), "seite": str(selected_page), "spiel": game_choice}
@@ -1819,7 +2037,8 @@ def main():
 
     # ---------- Schritt 3: Spielen ----------
     with st.container(border=True):
-        _step_title(3, game_title)
+        if setup_open:
+            _step_title(3, game_title)
         if game_choice != "irregulars":
             st.caption(f"{selected_label} · {page_text} · {len(df_vocab)} Vokabeln")
 
