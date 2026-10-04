@@ -1056,13 +1056,69 @@ def game_irregulars_assign():
 
 # ============================ Haupt-UI (Controller) ============================
 
+APP_CSS = """
+<style>
+/* Etwas kompakter oben */
+.block-container { padding-top: 3.5rem; max-width: 1100px; }
+
+/* Ausgewähltes Spiel blau statt rot hervorheben */
+button[kind="primary"],
+button[data-testid="baseButton-primary"],
+button[data-testid="stBaseButton-primary"] {
+  background-color: #1e88e5 !important; border-color: #1e88e5 !important; color: white !important;
+}
+button[kind="primary"]:hover,
+button[data-testid="baseButton-primary"]:hover,
+button[data-testid="stBaseButton-primary"]:hover {
+  background-color: #1565c0 !important; border-color: #1565c0 !important;
+}
+
+/* Kopfbereich */
+.app-hero {
+  background: linear-gradient(135deg, #1e88e5 0%, #5e35b1 100%);
+  color: white; border-radius: 16px; padding: 18px 22px; margin-bottom: 18px;
+}
+.app-hero h1 { color: white; margin: 0; padding: 0; font-size: 2rem; line-height: 1.2; }
+.app-hero p { margin: 6px 0 0 0; opacity: .92; font-size: 1rem; }
+
+/* Schritt-Überschriften */
+.step-title { font-size: 1.15rem; font-weight: 700; margin: 4px 0 8px 0; }
+.step-badge {
+  display: inline-block; background: #1e88e5; color: white; border-radius: 999px;
+  width: 1.7rem; height: 1.7rem; line-height: 1.7rem; text-align: center;
+  margin-right: 8px; font-size: .95rem;
+}
+
+/* Spiel-Kacheln: Buttons größer machen */
+.game-tile-desc { font-size: .85rem; color: #666; margin: -4px 0 6px 2px; min-height: 2.4em; }
+div[data-testid="stButton"] button p { font-size: 1rem; }
+
+@media (max-width: 640px) {
+  .app-hero h1 { font-size: 1.5rem; }
+  .block-container { padding-top: 3rem; }
+}
+</style>
+"""
+
+def _step_title(num: int, text: str):
+    st.markdown(
+        f'<div class="step-title"><span class="step-badge">{num}</span>{text}</div>',
+        unsafe_allow_html=True,
+    )
+
 def main():
     BASE_DIR = Path(__file__).parent
 
-    st.title("📚 Wortschatz-Spiele")
+    st.markdown(APP_CSS, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="app-hero"><h1>📚 Wortschatz-Spiele</h1>'
+        '<p>Wähle deine Klasse und Seite – dann such dir ein Spiel aus!</p></div>',
+        unsafe_allow_html=True,
+    )
 
-    # Sidebar
+    # Sidebar (nur für Lehrkräfte relevant)
     with st.sidebar:
+        st.markdown("### ⚙️ Für Lehrkräfte")
         if st.button("🧹 Cache leeren (Dateisuche neu starten)"):
             st.cache_data.clear()
             st.rerun()
@@ -1094,33 +1150,81 @@ def main():
         return (klasse_num, kurs_order)
 
     unique_labels = sorted(df_info["label"].unique(), key=sort_key)
-    selected_label = st.selectbox("1. Wähle Klasse/Kurs", unique_labels)
 
-    if selected_label:
-        filtered_df = df_info[df_info["label"] == selected_label].reset_index(drop=True)
-        unique_pages = sorted(filtered_df["page"].unique())
-        selected_page = st.selectbox("2. Wähle Seite", unique_pages)
+    # ---------- Schritt 1: Klasse/Kurs + Seite ----------
+    with st.container(border=True):
+        _step_title(1, "Klasse und Seite wählen")
+        col_k, col_p = st.columns([3, 2])
+        with col_k:
+            selected_label = st.selectbox("Klasse/Kurs", unique_labels)
 
-        current_info = filtered_df[filtered_df["page"] == selected_page].iloc[0]
-        selected_path = current_info["path"]
-        selected_classe = current_info["classe"]
+    if not selected_label:
+        st.info("Wähle oben eine Klasse und einen Kurs, um mit dem Spiel zu beginnen.")
+        if st.session_state.dev_mode:
+            st.subheader("Debug Info: Gefundene Dateien")
+            st.dataframe(df_info.head(3))
+        return
 
-        df_vocab = load_and_preprocess_df(selected_path)
+    filtered_df = df_info[df_info["label"] == selected_label].reset_index(drop=True)
+    unique_pages = sorted(filtered_df["page"].unique())
+    with col_p:
+        selected_page = st.selectbox("Seite im Buch", unique_pages)
 
-        if df_vocab.empty:
+    current_info = filtered_df[filtered_df["page"] == selected_page].iloc[0]
+    selected_path = current_info["path"]
+    selected_classe = current_info["classe"]
+
+    df_vocab = load_and_preprocess_df(selected_path)
+
+    is_french = current_info["course"] == "französisch"
+    lang = "FR" if is_french else "EN"
+
+    # ---------- Schritt 2: Spiel wählen (große Kacheln) ----------
+    # (code, Titel, Beschreibung)
+    games = [
+        ("input", f"✍️ Eingabe (DE → {lang})", "Schreibe die Übersetzung selbst."),
+        ("memory", f"🃏 Wörter Memory (DE ↔ {lang})", "Finde die passenden Wortpaare."),
+        ("hangman", f"🪢 Hangman ({lang})", "Errate das Wort Buchstabe für Buchstabe."),
+        ("irregulars", "🔀 Unregelmäßige Verben", "Ordne die Verbformen richtig zu (Englisch)."),
+    ]
+    game_codes = [g[0] for g in games]
+    if st.session_state.get("game_choice") not in game_codes:
+        st.session_state.game_choice = "input"
+
+    with st.container(border=True):
+        _step_title(2, "Spiel auswählen")
+        for row_start in range(0, len(games), 2):
+            cols = st.columns(2)
+            for (code, title, desc), col in zip(games[row_start:row_start + 2], cols):
+                with col:
+                    is_active = st.session_state.game_choice == code
+                    label = f"✅ {title}" if is_active else title
+                    if st.button(
+                        label,
+                        key=f"game_tile_{code}",
+                        type="primary" if is_active else "secondary",
+                        use_container_width=True,
+                    ):
+                        if not is_active:
+                            st.session_state.game_choice = code
+                            st.rerun()
+                    st.markdown(f'<div class="game-tile-desc">{desc}</div>', unsafe_allow_html=True)
+
+    game_choice = st.session_state.game_choice
+    game_title = next(t for c, t, _ in games if c == game_choice)
+
+    # ---------- Schritt 3: Spielen ----------
+    with st.container(border=True):
+        _step_title(3, game_title)
+        if game_choice != "irregulars":
+            st.caption(f"{selected_label} · Seite {selected_page} · {len(df_vocab)} Vokabeln")
+
+        if df_vocab.empty and game_choice != "irregulars":
             st.warning(f"Datei **{selected_path.name}** enthält keine Vokabeln.")
 
-        game_options = {
-            "Eingabe (DE → EN)": "input",
-            "Wörter Memory (DE ↔ EN)": "memory",
-            "Hangman (EN)": "hangman",
-            "Unregelmäßige Verben Memory (aus Code)": "irregulars",
-        }
-        game_choice_label = st.selectbox("Wähle ein Spiel", list(game_options.keys()))
-        game_choice = game_options.get(game_choice_label)
-
         if game_choice in ["input", "memory", "hangman"]:
-            seed_val = st.sidebar.text_input("3. Seed (optional, für Reproduzierbarkeit)", value="")
+            with st.sidebar:
+                seed_val = st.text_input("Seed (optional, für Reproduzierbarkeit)", value="")
 
             if game_choice == "input":
                 if len(df_vocab) < 1:
@@ -1130,28 +1234,30 @@ def main():
                     game_input(df_vocab, selected_label, selected_page)
 
             elif game_choice == "memory":
-                memory_subset_mode = st.sidebar.radio(
-                    "4. Wortanzahl wählen",
-                    options=["Alle Vokabeln", "Subset (k Paare)"],
-                    key="memory_subset_mode"
-                )
-                memory_subset_k = 0
-                if memory_subset_mode == "Subset (k Paare)":
-                    memory_subset_k = st.sidebar.slider(
-                        "Anzahl Paare (k)",
-                        min_value=2,
-                        max_value=len(df_vocab),
-                        value=min(10, len(df_vocab))
+                force_new = False
+                with st.expander("⚙️ Memory-Einstellungen (Anzahl Wörter, Lösung)", expanded=False):
+                    memory_subset_mode = st.radio(
+                        "Wortanzahl wählen",
+                        options=["Alle Vokabeln", "Subset (k Paare)"],
+                        key="memory_subset_mode",
+                        horizontal=True,
                     )
+                    memory_subset_k = 0
+                    if memory_subset_mode == "Subset (k Paare)":
+                        if len(df_vocab) > 2:
+                            memory_subset_k = st.slider(
+                                "Anzahl Paare (k)",
+                                min_value=2,
+                                max_value=len(df_vocab),
+                                value=min(10, len(df_vocab))
+                            )
+                        else:
+                            memory_subset_k = len(df_vocab)
 
-                show_sol = st.sidebar.checkbox("Lösungstabelle anzeigen")
+                    show_sol = st.checkbox("Lösungstabelle anzeigen")
 
-                colBtn, _ = st.sidebar.columns(2)
-                with colBtn:
-                    if st.button("Neue Wortauswahl / Shuffle", key="new_subset_btn"):
+                    if st.button("🔀 Neue Wortauswahl / Shuffle", key="new_subset_btn"):
                         force_new = True
-                    else:
-                        force_new = False
 
                 if len(df_vocab) < 2:
                     st.info("Für das Memory-Spiel werden mindestens 2 Vokabelpaare benötigt.")
@@ -1174,16 +1280,11 @@ def main():
         elif game_choice == "irregulars":
             game_irregulars_assign()
 
-        if st.session_state.dev_mode:
-            st.subheader("Debug Info: Aktuelle Auswahl")
-            st.write(f"Pfad: `{selected_path}`")
-            st.dataframe(df_vocab.head(3))
-
-    else:
-        st.info("Wähle links eine Klasse und einen Kurs, um mit dem Spiel zu beginnen.")
-        if st.session_state.dev_mode:
-            st.subheader("Debug Info: Gefundene Dateien")
-            st.dataframe(df_info.head(3))
+    if st.session_state.dev_mode:
+        st.subheader("Debug Info: Aktuelle Auswahl")
+        st.write(f"Pfad: `{selected_path}`")
+        st.write(f"Klasse: {selected_classe}")
+        st.dataframe(df_vocab.head(3))
 
 if __name__ == "__main__":
     main()
