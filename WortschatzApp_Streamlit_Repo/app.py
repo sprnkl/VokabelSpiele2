@@ -430,6 +430,52 @@ setTimeout(__fit, 50); setTimeout(__fit, 400);
 </script>"""
 
 
+VOICE_JS = """
+<script>
+// Vorlesen: immer dieselbe, möglichst natürliche Frauenstimme nehmen.
+// (Ohne feste Wahl nimmt der Browser beim ersten Klick seine Standardstimme und danach
+// oft die erste Stimme der Liste – unter Windows z. B. eine männliche Roboterstimme.)
+const __MALE = /\\bmale\\b|david|mark\\b|george|guy\\b|ryan|thomas|daniel|paul\\b|henri|claude|alex\\b|fred\\b|rishi|oliver|arthur|james|william|christopher|eric\\b|roger|andrew|brian|liam|remy|rémy|jerome|jérôme|gerard|antoine|nicolas|mathieu|alain/i;
+const __FEMALE = /female|zira|hazel|susan|libby|sonia|maisie|aria\\b|jenny|michelle|emma|ava\\b|samantha|karen|moira|tessa|serena|kate\\b|fiona|martha|victoria|allison|julie|hortense|denise|eloise|vivienne|brigitte|amelie|amélie|audrey|aurelie|aurélie|marie|celine|céline|virginie|sylvie|charlotte|ariane|google fran/i;
+const __voiceCache = {};
+function __pickVoice(lang) {
+  if (__voiceCache[lang]) return __voiceCache[lang];
+  let vs = [];
+  try { vs = speechSynthesis.getVoices() || []; } catch (e) {}
+  const want = lang.toLowerCase(), pre = want.slice(0, 2);
+  let best = null, bestScore = -1e9;
+  vs.forEach((v, i) => {
+    const vl = (v.lang || '').toLowerCase().replace('_', '-');
+    if (!vl.startsWith(pre)) return;
+    const n = v.name || '';
+    let sc = 0;
+    if (vl === want) sc += 5;
+    if (__FEMALE.test(n)) sc += 20;
+    if (__MALE.test(n)) sc -= 50;
+    if (/natural|online|neural|premium|enhanced/i.test(n)) sc += 10;
+    if (/google/i.test(n)) sc += 3;
+    sc -= i * 0.001;  // bei Gleichstand: Reihenfolge des Browsers
+    if (sc > bestScore) { bestScore = sc; best = v; }
+  });
+  if (best) __voiceCache[lang] = best;
+  return best;
+}
+function __sayNow(txt, lang) {
+  const u = new SpeechSynthesisUtterance(txt); u.lang = lang; u.rate = 0.9;
+  const v = __pickVoice(lang); if (v) u.voice = v;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+function __say(txt, lang) {
+  if (!txt || !('speechSynthesis' in window)) return false;
+  // Sofort sprechen (Tablets erlauben Ton nur direkt beim Antippen). Ist die Stimmenliste
+  // noch nicht geladen, nimmt der Browser seine Standardstimme für die Sprache.
+  __sayNow(txt, lang);
+  return true;
+}
+try { speechSynthesis.getVoices(); } catch (e) {}
+</script>"""
+
+
 def status_bar(timer: dict, nonce: str = "", progress=None, chips=()):
     """Kompakte Statusleiste: Fortschritt, Info-Chips und laufende Stoppuhr in einer Zeile.
 
@@ -489,14 +535,12 @@ def speak_button(text: str, lang: str, label: str = "🔊 Anhören"):
     embed_html(f"""
 <button id="b" style="font-family:'Source Sans Pro',Arial,sans-serif;font-size:15px;padding:6px 14px;
   border:2px solid #1e88e5;background:white;color:#1565c0;border-radius:10px;cursor:pointer;">{label}</button>
+{VOICE_JS}
 <script>
 const txt = {t}; const lang = {l};
 document.getElementById('b').addEventListener('click', () => {{
   try {{
-    const u = new SpeechSynthesisUtterance(txt); u.lang = lang; u.rate = 0.9;
-    const v = speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith(lang.slice(0,2)));
-    if (v) u.voice = v;
-    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    if (!__say(txt, lang)) document.getElementById('b').textContent = '🔇 nicht verfügbar';
   }} catch (e) {{ document.getElementById('b').textContent = '🔇 nicht verfügbar'; }}
 }});
 </script>""", height=46)
@@ -1321,6 +1365,13 @@ body {{
 }}
 .card.fx .tag {{ background:#9575cd; }}
 .card .txt {{ display:block; }}
+.card {{ position:relative; }}
+.card .say {{
+  position:absolute; top:4px; right:4px; margin:0; border:1.5px solid #b39ddb; background:white;
+  color:#5e35b1; border-radius:999px; padding:1px 7px; font-size:14px; line-height:1.35; cursor:pointer;
+  touch-action: manipulation;
+}}
+.card .say:hover {{ background:#ede7f6; }}
 .card:hover {{ box-shadow: 0 3px 8px rgba(30,136,229,.25); }}
 .card:active {{ transform: scale(0.97); }}
 .correct {{ background:#e8f5e9 !important; border-color:#2e7d32 !important; color:#1b5e20; cursor:default; opacity:.75; }}
@@ -1357,6 +1408,7 @@ body {{ position:relative; }}
 <div id="box" class="grid" aria-live="polite"></div>
 <div id="overlay"><div class="box"><h2 id="ovTitle"></h2><p id="ovText"></p><button class="btn" id="ovBtn"></button></div></div>
 
+{VOICE_JS}
 <script>
 const allPairs = {pairs_json};
 const TTS_LANG = {tts_lang};
@@ -1388,14 +1440,9 @@ function resetTimer() {{
   clearInterval(timerId); running = false; startTime = null; elapsed = 0; updateTimer();
 }}
 
-function speak(txt) {{
-  if (!SOUND) return;
-  try {{
-    const u = new SpeechSynthesisUtterance(txt); u.lang = TTS_LANG; u.rate = 0.9;
-    const v = speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith(TTS_LANG.slice(0,2)));
-    if (v) u.voice = v;
-    speechSynthesis.cancel(); speechSynthesis.speak(u);
-  }} catch (e) {{}}
+function speak(txt, always) {{
+  if (!SOUND && !always) return;
+  try {{ __say(txt, TTS_LANG); }} catch (e) {{}}
 }}
 
 function markCorrect(el) {{
@@ -1415,6 +1462,18 @@ function createCard(text, pid, isForeign) {{
   const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = isForeign ? LANG_TAG : 'DE';
   const txt = document.createElement('span'); txt.className = 'txt'; txt.textContent = text;
   c.appendChild(tag); c.appendChild(txt);
+  if (isForeign) {{
+    // Lautsprecher: Wort anhören, ohne die Karte auszuwählen
+    const p = allPairs.find(p => String(p.id) === String(pid));
+    const sb = document.createElement('button');
+    sb.type = 'button'; sb.className = 'say'; sb.textContent = '🔊';
+    sb.title = 'Anhören'; sb.setAttribute('aria-label', 'Anhören: ' + text);
+    sb.draggable = false;
+    sb.addEventListener('click', (e) => {{ e.stopPropagation(); e.preventDefault(); speak(p ? p.say : text, true); }});
+    sb.addEventListener('keydown', (e) => {{ e.stopPropagation(); }});
+    sb.addEventListener('dragstart', (e) => {{ e.preventDefault(); e.stopPropagation(); }});
+    c.appendChild(sb);
+  }}
   c.setAttribute('data-pid', String(pid));
   c.setAttribute('role', 'button');
   c.setAttribute('tabindex', '0');
@@ -1950,13 +2009,15 @@ def main():
             '<div class="sb-sub">Hier musst du normalerweise nichts ändern.</div>',
             unsafe_allow_html=True,
         )
-        if st.button("🧹 Cache leeren (Dateisuche neu starten)"):
+        if st.button("🔄 Vokabeln neu laden", help="Hilft, wenn etwas hängt oder neue Vokabeln noch nicht angezeigt werden."):
             st.cache_data.clear()
             st.rerun()
 
         if "dev_mode" not in st.session_state:
             st.session_state.dev_mode = False
-        st.session_state.dev_mode = st.checkbox("Dev/Debug-Modus", value=st.session_state.dev_mode, key="dev_mode_cbox")
+        st.session_state.dev_mode = st.checkbox(
+            "🛠️ Technische Infos anzeigen", value=st.session_state.dev_mode, key="dev_mode_cbox",
+            help="Zeigt Details zu den geladenen Dateien – nur zur Fehlersuche nötig.")
 
     df_info = get_vocab_file_info(BASE_DIR)
 
@@ -1970,7 +2031,7 @@ def main():
         )
         st.caption(f"Basisverzeichnis: `{BASE_DIR}`")
         if st.session_state.dev_mode:
-            st.subheader("Debug Info")
+            st.subheader("Technische Infos")
             st.write("df_info ist leer.")
         return
 
@@ -2103,7 +2164,7 @@ def main():
     else:
         # ---------- Kompakte Leiste statt Schritt 1+2 ----------
         with keyed_container("summary_bar", border=True):
-            c_info, c_btn = st.columns([4, 1.3])
+            c_info, c_btn = st.columns([3.2, 1.8])
             with c_info:
                 st.markdown(
                     f'<div class="sum-line"><span class="sum-chip">📚 {html_escape(selected_label)}</span>'
@@ -2111,7 +2172,7 @@ def main():
                     f'<span class="sum-chip sum-game">{html_escape(game_title)}</span></div>',
                     unsafe_allow_html=True)
             with c_btn:
-                if st.button("✏️ Ändern", key="open_setup", **WIDE):
+                if st.button("⬅️ Zurück zur Auswahl", key="open_setup", **WIDE):
                     st.session_state.setup_open = True
                     st.rerun()
 
@@ -2128,7 +2189,7 @@ def main():
         pass
 
     with st.sidebar:
-        with st.expander("🔗 Link / QR-Code zu dieser Übung"):
+        with st.expander("🔗 Übung teilen (Link / QR-Code)"):
             st.caption("Damit landen alle direkt in dieser Klasse, Seite und diesem Spiel.")
             _share_box("&".join(f"{k}={v}" for k, v in desired_qp.items()))
 
@@ -2145,8 +2206,8 @@ def main():
         if game_choice in ["input", "mc", "memory", "hangman"]:
             with st.sidebar:
                 seed_val = st.text_input(
-                    "🎲 Startwert für die Reihenfolge (optional)", value="",
-                    help="Gleicher Startwert = gleiche Wortreihenfolge, z. B. damit alle in der Klasse dieselben Wörter bekommen."
+                    "🎲 Gleiche Reihenfolge für alle (Code, optional)", value="",
+                    help="Wenn alle in der Klasse denselben Code eingeben (z. B. 7), bekommen alle dieselben Wörter in derselben Reihenfolge. Leer lassen = jedes Mal neu gemischt."
                 )
 
             if game_choice in ("input", "mc"):
@@ -2168,10 +2229,11 @@ def main():
 
             elif game_choice == "memory":
                 force_new = False
-                with st.expander("⚙️ Memory-Einstellungen (Anzahl Wörter, Lösung)", expanded=False):
+                with st.expander("⚙️ Memory-Einstellungen (Anzahl der Karten, Lösung)", expanded=False):
                     memory_subset_mode = st.radio(
-                        "Wortanzahl wählen",
+                        "Mit wie vielen Wörtern möchtest du spielen?",
                         options=["Alle Vokabeln", "Subset (k Paare)"],
+                        format_func=lambda o: "Alle Wörter der Seite" if o == "Alle Vokabeln" else "Nur einige Wörter",
                         key="memory_subset_mode",
                         horizontal=True,
                     )
@@ -2179,7 +2241,7 @@ def main():
                     if memory_subset_mode == "Subset (k Paare)":
                         if len(df_vocab) > 2:
                             memory_subset_k = st.slider(
-                                "Anzahl Paare (k)",
+                                "Anzahl der Wortpaare",
                                 min_value=2,
                                 max_value=len(df_vocab),
                                 value=min(10, len(df_vocab))
@@ -2187,9 +2249,9 @@ def main():
                         else:
                             memory_subset_k = len(df_vocab)
 
-                    show_sol = st.checkbox("Lösungstabelle anzeigen")
+                    show_sol = st.checkbox("Lösungen anzeigen")
 
-                    if st.button("🔀 Neue Wortauswahl / Shuffle", key="new_subset_btn"):
+                    if st.button("🔀 Andere Wörter auswählen", key="new_subset_btn"):
                         force_new = True
 
                 if len(df_vocab) < 2:
@@ -2215,7 +2277,7 @@ def main():
             game_irregulars_assign()
 
     if st.session_state.dev_mode:
-        st.subheader("Debug Info: Aktuelle Auswahl")
+        st.subheader("Technische Infos: aktuelle Auswahl")
         st.write(f"Pfad: `{selected_path}`")
         st.write(f"Klasse: {selected_classe}")
         st.dataframe(df_vocab.head(3))
