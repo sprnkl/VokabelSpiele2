@@ -1461,8 +1461,8 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
         seed_val, subset_state_key, ["de", "en"]
     )
 
-    st.caption(f"Paare in dieser Runde: **{len(items)}** · Tippe zwei Karten an, die zusammengehören. "
-               "Auf dem Handy wird in kleineren Runden gespielt.")
+    st.caption(f"Paare in dieser Runde: **{len(items)}** · Tippe links eine Karte an und rechts die passende "
+               "(oder umgekehrt). Bei vielen Wörtern wird in kleineren Runden gespielt.")
 
     if show_solution_table:
         st.markdown("##### Lösung")
@@ -1477,6 +1477,7 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
          for i, it in enumerate(items)]
     )
     tag_de, tag_fx = tags or ("DE", lang if lang in ("EN", "FR") else "EN")
+    head_de, head_fx = col_names or ("Deutsch", LANG_NAMES.get(lang, "Englisch"))
     tts_lang = js_json(TTS_LANG.get(lang, "en-GB"))
 
     html = f"""<!DOCTYPE html>
@@ -1500,7 +1501,16 @@ body {{
 }}
 .btn:hover {{ background:var(--primary); color:white; }}
 .toggle {{ border-color:#7e57c2; color:#5e35b1; }}
-.grid {{ display:flex; flex-wrap:wrap; gap:8px; }}
+/* Zwei Spalten: links z. B. Deutsch, rechts Englisch – jede Spalte für sich gemischt */
+.grid {{ display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:8px 10px; align-items:stretch; }}
+.grid .card {{ min-width:0; }}
+.colhead {{
+  text-align:center; font-weight:800; font-size:13px; letter-spacing:.04em; text-transform:uppercase;
+  padding:4px 6px; border-radius:8px; color:white;
+}}
+.colhead.de {{ background:#64b5f6; }}
+.colhead.fx {{ background:#9575cd; }}
+@media (max-width: 420px) {{ .card {{ font-size:15px; padding:12px 6px; }} }}
 .card {{
   background:white; border:2px solid #90caf9; border-radius:12px;
   padding:12px 10px; min-width:120px; flex: 1 1 140px; text-align:center; font-size:16px;
@@ -1525,7 +1535,11 @@ body {{
 .card:hover {{ box-shadow: 0 3px 8px rgba(30,136,229,.25); }}
 .card:active {{ transform: scale(0.97); }}
 .correct {{ background:#e8f5e9 !important; border-color:#2e7d32 !important; color:#1b5e20; cursor:default; opacity:.75; }}
-.selected {{ background:#e3f2fd; border-color:var(--primary); box-shadow:0 0 0 3px rgba(30,136,229,0.35); }}
+/* Ausgewählte Karte: immer deutlich blau – auch englische/französische (lila) Karten */
+.card.selected {{
+  background:#bbdefb !important; border-color:var(--primary) !important;
+  box-shadow:0 0 0 3px rgba(30,136,229,0.45) !important; transform: scale(1.02);
+}}
 .wrong {{ animation: shake .3s linear; border-color: #d32f2f!important; background:#ffebee; }}
 @keyframes shake {{
   0%,100% {{ transform: translateX(0); }}
@@ -1565,11 +1579,17 @@ const allPairs = {pairs_json};
 const TTS_LANG = {tts_lang};
 const LANG_TAG = {js_json(tag_fx)};
 const DE_TAG = {js_json(tag_de)};
+const HEAD_DE = {js_json(head_de)};
+const HEAD_FX = {js_json(head_fx)};
 const SAY_BOTH = {js_json(bool(say_both))};
 const nativeDnD = ('ondragstart' in document.createElement('div'));
 let TAP_MODE = true;
 let SOUND = true;
-const CHUNK = (window.innerWidth < 700 && allPairs.length > 10) ? 8 : allPairs.length;
+// Bei vielen Wörtern in kleineren, gleich großen Runden spielen (Handy höchstens 8, sonst 10 Paare),
+// damit beide Spalten auf den Bildschirm passen.
+const MAX_ROUND = window.innerWidth < 700 ? 8 : 10;
+const CHUNK = allPairs.length > MAX_ROUND + 2
+  ? Math.ceil(allPairs.length / Math.ceil(allPairs.length / MAX_ROUND)) : allPairs.length;
 
 let running = false, timerId = null, startTime = null, elapsed = 0;
 let order = [], roundIdx = 0, pairs = [];
@@ -1704,13 +1724,16 @@ function layoutRound() {{
   box.innerHTML = "";
   draggedCard = null; selectedCard = null; correctPairs = 0; solved = false;
   pairs = order.slice(roundIdx * CHUNK, (roundIdx + 1) * CHUNK);
-  let cards = [];
-  for (const p of pairs) {{
-    cards.push({{ text: p.de, pid: p.id, fx: false }});
-    cards.push({{ text: p.en, pid: p.id, fx: true }});
+  // links alle Karten der einen Sprache, rechts die der anderen – jede Spalte eigens gemischt
+  // (abwechselnd eingefügt, damit nebeneinanderliegende Karten gleich hoch sind)
+  for (const [cls, head] of [['de', HEAD_DE], ['fx', HEAD_FX]]) {{
+    const h = document.createElement('div'); h.className = 'colhead ' + cls; h.textContent = head; box.appendChild(h);
   }}
-  shuffleArray(cards);
-  for (const c of cards) box.appendChild(createCard(c.text, c.pid, c.fx));
+  const left = shuffleArray(pairs.slice()), right = shuffleArray(pairs.slice());
+  for (let r = 0; r < left.length; r++) {{
+    box.appendChild(createCard(left[r].de, left[r].id, false));
+    box.appendChild(createCard(right[r].en, right[r].id, true));
+  }}
   updateProgress();
   setTimeout(() => {{ try {{ __fit(); }} catch (e) {{}} }}, 30);
 }}
@@ -1760,6 +1783,32 @@ document.getElementById('modeBtn').addEventListener('click', () => {{
 document.getElementById('soundBtn').addEventListener('click', () => {{
   SOUND = !SOUND;
   document.getElementById('soundBtn').textContent = SOUND ? "🗣️ Vorlesen an" : "🗣️ Vorlesen aus";
+}});
+
+// Ziehen: am oberen/unteren Bildschirmrand scrollt die Seite mit
+function __scroller() {{
+  try {{
+    let el = window.frameElement;
+    while (el && el !== window.parent.document.body) {{
+      el = el.parentElement;
+      if (!el) break;
+      const oy = window.parent.getComputedStyle(el).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 2) return el;
+    }}
+    return window.parent.document.scrollingElement;
+  }} catch (e) {{ return null; }}
+}}
+let __lastScroll = 0;
+document.addEventListener('dragover', (e) => {{
+  const now = Date.now(); if (now - __lastScroll < 30) return; __lastScroll = now;
+  try {{
+    const fr = window.frameElement.getBoundingClientRect();
+    const y = fr.top + e.clientY, H = window.parent.innerHeight, edge = 80;
+    let dy = 0;
+    if (y < edge) dy = -Math.ceil((edge - y) / 3);
+    else if (y > H - edge) dy = Math.ceil((y - (H - edge)) / 3);
+    if (dy) {{ const sc = __scroller(); if (sc) sc.scrollTop += dy; }}
+  }} catch (x) {{}}
 }});
 
 setModeLabel();
