@@ -101,6 +101,15 @@ VERBS = [
     {"infinitive": "win", "pastSimple": "won", "pastParticiple": "won", "meaning": "gewinnen"},
     {"infinitive": "write", "pastSimple": "wrote", "pastParticiple": "written", "meaning": "schreiben"},
 ]
+# Spiele im Bereich „Unregelmäßige Verben“ (Code, Symbol, Titel, Beschreibung, Farbe).
+# „irregulars“ heißt so wie früher, damit alte Links und QR-Codes weiter funktionieren.
+VERB_GAMES = [
+    ("irregulars", "🔀", "Formen zuordnen", "Die 4 Formen eines Verbs richtig zuordnen", "#8e24aa"),
+    ("verbs_type", "⌨️", "Formen eintippen", "2. und 3. Form selbst schreiben", "#3949ab"),
+    ("verbs_memory", "🃏", "Verben-Memory", "Passende Verbformen finden", "#00897b"),
+]
+VERB_GAME_CODES = [g[0] for g in VERB_GAMES]
+
 VERB_TARGETS = [
     ("Infinitive", "infinitive"),
     ("Simple Past (2. Form des Verbs)", "pastSimple"),
@@ -819,7 +828,11 @@ def _vocab_items(df_view: pd.DataFrame):
     ]
 
 
-def _new_practice_state(items, base_hash, round_label="Alle Wörter"):
+WORD_NOUN = ("Wort", "Wörter", "Fehlerwörter")
+VERB_NOUN = ("Verb", "Verben", "Fehler-Verben")
+
+
+def _new_practice_state(items, base_hash, round_label=None, noun=WORD_NOUN):
     order = list(range(len(items)))
     random.Random().shuffle(order)
     return {
@@ -833,7 +846,8 @@ def _new_practice_state(items, base_hash, round_label="Alle Wörter"):
         "history": [],  # {item, user, result}
         "last": None,
         "timer": {"running": True, "started_ms": int(time.time() * 1000), "elapsed_ms": 0},
-        "round_label": round_label,
+        "round_label": round_label or f"Alle {noun[1]}",
+        "noun": noun,
         "celebrated": False,
         # nur Multiple Choice
         "options": None,
@@ -841,11 +855,11 @@ def _new_practice_state(items, base_hash, round_label="Alle Wörter"):
     }
 
 
-def _get_practice_state(state_key, items):
+def _get_practice_state(state_key, items, noun=WORD_NOUN):
     base_hash = _hash_dict_list(items, ["de", "en"])
     s = st.session_state.get(state_key)
     if s is None or s.get("base_hash") != base_hash or "counts" not in s:
-        s = _new_practice_state(items, base_hash)
+        s = _new_practice_state(items, base_hash, noun=noun)
         st.session_state[state_key] = s
     return s
 
@@ -873,7 +887,8 @@ def _status_row(s):
     done = min(s["index"], n)
     status_bar(
         s["timer"], nonce=f"{s['index']}",
-        progress=(f"<b>{html_escape(s['round_label'])}</b> · Wort {min(done + 1, n)} von {n}", done / n if n else 0),
+        progress=(f"<b>{html_escape(s['round_label'])}</b> · {s.get('noun', WORD_NOUN)[0]} {min(done + 1, n)} von {n}",
+                  done / n if n else 0),
         chips=[(f"🔥 Serie: {s['streak']}", "orange"), (f"✅ {s['counts']['correct']}", "green")],
     )
 
@@ -894,15 +909,17 @@ def _round_summary(s, state_key, q_field, a_field, q_name, a_name):
     _stop_timer(s["timer"])
     c = s["counts"]
     n = len(s["order"])
+    noun = s.get("noun", WORD_NOUN)
+    err = noun[2]
     pct = round(100 * c["correct"] / n) if n else 0
     if pct >= 90:
         msg = "Hervorragend! 🌟"
     elif pct >= 70:
         msg = "Sehr gut gemacht! 💪"
     elif pct >= 50:
-        msg = "Gut! Übe die Fehlerwörter noch einmal. 🙂"
+        msg = f"Gut! Übe die {err} noch einmal. 🙂"
     else:
-        msg = "Weiter üben – mit den Fehlerwörtern wird's besser! 🚀"
+        msg = f"Weiter üben – mit den {err}{'n' if err.endswith('wörter') else ''} wird's besser! 🚀"
     st.markdown(
         f'<div class="summary-card"><div class="summary-big">{c["correct"]} von {n} richtig ({pct} %)</div>'
         f'<div>{msg}</div>'
@@ -925,12 +942,12 @@ def _round_summary(s, state_key, q_field, a_field, q_name, a_name):
 
     b1, b2 = st.columns(2)
     with b1:
-        if uniq and st.button(f"🔁 Nur Fehlerwörter üben ({len(uniq)})", key=f"{state_key}_repeat",
+        if uniq and st.button(f"🔁 Nur {err} üben ({len(uniq)})", key=f"{state_key}_repeat",
                               type="primary", **WIDE):
-            st.session_state[state_key] = _new_practice_state(uniq, s["base_hash"], "Fehlerwörter")
+            st.session_state[state_key] = _new_practice_state(uniq, s["base_hash"], err, noun=noun)
             st.rerun()
     with b2:
-        if st.button("🔄 Alle Wörter nochmal", key=f"{state_key}_restart", **WIDE):
+        if st.button(f"🔄 Alle {noun[1]} nochmal", key=f"{state_key}_restart", **WIDE):
             st.session_state.pop(state_key, None)
             st.rerun()
 
@@ -1293,7 +1310,11 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
 # ---------- Wörter Memory (DE↔EN; Click/Tap; optional Drag) ----------
 def game_word_memory(df_view: pd.DataFrame, classe: str, page,
                      show_solution_table: bool, subset_mode: str, subset_k: int,
-                     seed_val: str, force_new_subset: bool = False, lang: str = "EN"):
+                     seed_val: str, force_new_subset: bool = False, lang: str = "EN",
+                     tags=None, say_both: bool = False, col_names=None):
+    """tags: Beschriftung der Karten (linke Spalte, rechte Spalte), Standard ("DE", "EN"/"FR").
+    say_both: auch die linke Spalte bekommt einen 🔊-Knopf (z. B. bei Verbformen, beide Englisch).
+    col_names: Spaltennamen der Lösungstabelle."""
     base_items = [
         {"de": r["de"], "en": r["en"]}
         for r in df_view.to_dict("records")
@@ -1320,13 +1341,16 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
     if show_solution_table:
         st.markdown("##### Lösung")
         st.dataframe(
-            pd.DataFrame(items)[["de", "en"]].rename(columns={"de": "Deutsch", "en": LANG_NAMES.get(lang, "EN")}),
+            pd.DataFrame(items)[["de", "en"]].rename(columns=dict(zip(
+                ("de", "en"), col_names or ("Deutsch", LANG_NAMES.get(lang, "EN"))))),
             **WIDE, hide_index=True
         )
 
     pairs_json = js_json(
-        [{"id": i, "de": it["de"], "en": it["en"], "say": main_form(it["en"])} for i, it in enumerate(items)]
+        [{"id": i, "de": it["de"], "en": it["en"], "say": main_form(it["en"]), "sayde": main_form(it["de"])}
+         for i, it in enumerate(items)]
     )
+    tag_de, tag_fx = tags or ("DE", lang if lang in ("EN", "FR") else "EN")
     tts_lang = js_json(TTS_LANG.get(lang, "en-GB"))
 
     html = f"""<!DOCTYPE html>
@@ -1412,7 +1436,9 @@ body {{ position:relative; }}
 <script>
 const allPairs = {pairs_json};
 const TTS_LANG = {tts_lang};
-const LANG_TAG = {js_json(lang if lang in ("EN", "FR") else "EN")};
+const LANG_TAG = {js_json(tag_fx)};
+const DE_TAG = {js_json(tag_de)};
+const SAY_BOTH = {js_json(bool(say_both))};
 const nativeDnD = ('ondragstart' in document.createElement('div'));
 let TAP_MODE = true;
 let SOUND = true;
@@ -1459,17 +1485,17 @@ function onMatch(a, b) {{
 function createCard(text, pid, isForeign) {{
   const c = document.createElement('div');
   c.className = 'card' + (isForeign ? ' fx' : ' de');
-  const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = isForeign ? LANG_TAG : 'DE';
+  const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = isForeign ? LANG_TAG : DE_TAG;
   const txt = document.createElement('span'); txt.className = 'txt'; txt.textContent = text;
   c.appendChild(tag); c.appendChild(txt);
-  if (isForeign) {{
+  if (isForeign || SAY_BOTH) {{
     // Lautsprecher: Wort anhören, ohne die Karte auszuwählen
     const p = allPairs.find(p => String(p.id) === String(pid));
     const sb = document.createElement('button');
     sb.type = 'button'; sb.className = 'say'; sb.textContent = '🔊';
     sb.title = 'Anhören'; sb.setAttribute('aria-label', 'Anhören: ' + text);
     sb.draggable = false;
-    sb.addEventListener('click', (e) => {{ e.stopPropagation(); e.preventDefault(); speak(p ? p.say : text, true); }});
+    sb.addEventListener('click', (e) => {{ e.stopPropagation(); e.preventDefault(); speak(p ? (isForeign ? p.say : p.sayde) : text, true); }});
     sb.addEventListener('keydown', (e) => {{ e.stopPropagation(); }});
     sb.addEventListener('dragstart', (e) => {{ e.preventDefault(); e.stopPropagation(); }});
     c.appendChild(sb);
@@ -1732,6 +1758,132 @@ def game_irregulars_assign():
             st.session_state.verbs_points_total = 0; new_round(); st.rerun()
 
 
+# ---------- Unregelmäßige Verben: Formen eintippen ----------
+def _verb_items():
+    return [{"de": f'{v["infinitive"]} ({v["meaning"]})', "en": f'{v["pastSimple"]} – {v["pastParticiple"]}', "verb": v}
+            for v in VERBS]
+
+
+def _other_verb_forms(solution: str) -> list:
+    """Alle Formen aller Verben außer der gesuchten (für die Tippfehler-Prüfung)."""
+    own = {normalize_text(p) for p in solution.split("/")} | {normalize_text(solution)}
+    forms = set()
+    for v in VERBS:
+        for k in ("infinitive", "pastSimple", "pastParticiple"):
+            for f in [v[k]] + v[k].split("/"):
+                if normalize_text(f) not in own:
+                    forms.add(f)
+    return sorted(forms)
+
+
+def game_verbs_type():
+    items = _verb_items()
+    state_key = "verbs_type_state"
+    s = _get_practice_state(state_key, items, noun=VERB_NOUN)
+    _status_row(s)
+
+    def _feedback(last):
+        if not last:
+            return
+        v, res = last["item"]["verb"], last["result"]
+        forms = f'<b>{html_escape(v["infinitive"])} – {html_escape(v["pastSimple"])} – {html_escape(v["pastParticiple"])}</b>'
+        if res == "correct":
+            st.markdown(f'<div class="fb fb-ok">✅ Richtig! {forms}</div>', unsafe_allow_html=True)
+        elif res == "almost":
+            st.markdown(f'<div class="fb fb-almost">🟡 Fast richtig! Achte auf die Schreibweise: {forms}'
+                        f'<br><span class="fb-small">Du hast geschrieben: {html_escape(last["user"])}</span></div>',
+                        unsafe_allow_html=True)
+        elif res == "skipped":
+            st.markdown(f'<div class="fb fb-wrong">⏭️ Übersprungen. So heißt es: {forms}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="fb fb-wrong">❌ Leider falsch. So heißt es: {forms}'
+                        f'<br><span class="fb-small">Du hast geschrieben: {html_escape(last["user"]) or "–"}</span></div>',
+                        unsafe_allow_html=True)
+        if res != "correct":
+            speak_button(f'{v["infinitive"]}, {v["pastSimple"].replace("/", ", ")}, {v["pastParticiple"].replace("/", ", ")}',
+                         "EN", label="🔊 Alle Formen anhören")
+
+    i = s["index"]
+    if i >= len(s["order"]):
+        _feedback(s["last"])
+        _round_summary(s, state_key, "de", "en", "Verb", "2. und 3. Form")
+        return
+    _feedback(s["last"])
+
+    item = s["items"][s["order"][i]]
+    v = item["verb"]
+    vocab_card(v["infinitive"], sub=f'Grundform · {v["meaning"]}')
+    speak_button(v["infinitive"], "EN", label="🔊 Englisch anhören")
+
+    label_ps = "Simple Past (2. Form des Verbs)"
+    label_pp = "Past Participle (3. Form des Verbs)"
+    with keyed_container("answer_box", border=True):
+        with st.form(key=f"verbs_type_form_{i}", border=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                u_ps = st.text_input(label_ps, key=f"verbs_type_ps_{i}", placeholder="z. B. went")
+            with c2:
+                u_pp = st.text_input(label_pp, key=f"verbs_type_pp_{i}", placeholder="z. B. gone")
+            b1, b2 = st.columns([1.2, 1])
+            with b1:
+                submitted = st.form_submit_button("✔ Prüfen", type="primary", key=f"verbs_type_check_{i}", **WIDE)
+            with b2:
+                skipped = st.form_submit_button("⏭️ Überspringen", key=f"verbs_type_skip_{i}", **WIDE)
+    st.caption("Tipp: Mit der Tab-Taste kommst du ins zweite Feld. Bei zwei Formen (z. B. was/were) reicht eine.")
+    if s["history"]:
+        focus_input(label_ps, nonce=f"verbs_type_{i}")
+
+    def _advance():
+        s["index"] += 1
+        if s["index"] >= len(s["order"]):
+            _stop_timer(s["timer"])
+        st.rerun()
+
+    if skipped:
+        _register_result(s, item, "", "skipped")
+        s["last"] = {"item": item, "user": "", "result": "skipped"}
+        _advance()
+    if submitted:
+        if not u_ps.strip() or not u_pp.strip():
+            st.warning("Bitte trage beide Formen ein – die 2. und die 3. Form.")
+        else:
+            # Andere Verbformen sind kein Tippfehler: „swum“ statt „swam“ ist falsch, nicht „fast richtig“
+            r1 = check_answer(u_ps, v["pastSimple"], others=_other_verb_forms(v["pastSimple"]))
+            r2 = check_answer(u_pp, v["pastParticiple"], others=_other_verb_forms(v["pastParticiple"]))
+            res = "correct" if r1 == r2 == "correct" else ("wrong" if "wrong" in (r1, r2) else "almost")
+            user = f"{u_ps.strip()} – {u_pp.strip()}"
+            _register_result(s, item, user, res)
+            s["last"] = {"item": item, "user": user, "result": res}
+            _advance()
+
+    if s["history"]:
+        with st.expander(f"📋 Bisherige Antworten ({len(s['history'])})"):
+            st.dataframe(_history_df(s, "de", "en", "Verb", "2. und 3. Form").iloc[::-1], **WIDE, hide_index=True)
+
+
+# ---------- Unregelmäßige Verben: Memory ----------
+VERB_MEMORY_MODES = {
+    "ps": ("Grundform ↔ Simple Past (2. Form)", "infinitive", "pastSimple", ("1. FORM", "2. FORM")),
+    "pp": ("Grundform ↔ Past Participle (3. Form)", "infinitive", "pastParticiple", ("1. FORM", "3. FORM")),
+    "de": ("Englisch ↔ Deutsch", "meaning", "infinitive", ("DE", "EN")),
+}
+
+
+def game_verbs_memory():
+    with st.expander("⚙️ Memory-Einstellungen (Formen, Anzahl der Karten, Lösung)", expanded=False):
+        mode = st.radio("Was soll zusammengefunden werden?", options=list(VERB_MEMORY_MODES),
+                        format_func=lambda m: VERB_MEMORY_MODES[m][0], key="verbs_memory_mode")
+        k = st.slider("Anzahl der Verben", min_value=4, max_value=len(VERBS), value=10, key="verbs_memory_k")
+        show_sol = st.checkbox("Lösungen anzeigen", key="verbs_memory_sol")
+        force_new = st.button("🔀 Andere Verben auswählen", key="verbs_memory_new")
+    title, left, right, tags = VERB_MEMORY_MODES.get(mode, VERB_MEMORY_MODES["ps"])
+    df = pd.DataFrame([{"de": v[left], "en": v[right]} for v in VERBS])
+    game_word_memory(df, "verben", mode, show_sol, "k", k, "", force_new_subset=force_new, lang="EN",
+                     tags=tags, say_both=(mode != "de"),
+                     col_names=(("Deutsch", "Englisch") if mode == "de" else
+                                ("Grundform", "2. Form" if mode == "ps" else "3. Form")))
+
+
 # ============================ Haupt-UI (Controller) ============================
 
 APP_CSS = """
@@ -1850,6 +2002,26 @@ div[data-testid="stButton"] button, div[data-testid="stFormSubmitButton"] button
 .st-key-game_grid [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 12px !important; }
 .st-key-game_grid [data-testid="stColumn"], .st-key-game_grid [data-testid="column"] {
   flex: 1 1 calc(33.333% - 12px) !important; min-width: calc(33.333% - 12px) !important; width: auto !important;
+}
+/* genau 4 Spiele (Vokabeln): 2 × 2 statt 3 + 1 */
+.st-key-game_grid [data-testid="stColumn"]:first-child:nth-last-child(4),
+.st-key-game_grid [data-testid="stColumn"]:first-child:nth-last-child(4) ~ [data-testid="stColumn"],
+.st-key-game_grid [data-testid="column"]:first-child:nth-last-child(4),
+.st-key-game_grid [data-testid="column"]:first-child:nth-last-child(4) ~ [data-testid="column"] {
+  flex: 1 1 calc(50% - 12px) !important; min-width: calc(50% - 12px) !important;
+}
+/* Bereich wählen: Vokabeln / Unregelmäßige Verben */
+/* englischen Hinweis „Press Enter to submit form“ ausblenden (Platzhalter erklärt es auf Deutsch) */
+[data-testid="InputInstructions"] { display: none !important; }
+.area-q { font-size: 1.15rem; font-weight: 700; margin: 2px 0 8px 0; color: #1f2340; }
+.st-key-area_grid button { min-height: 3.6rem !important; border-radius: 14px !important;
+  border: 2px solid #5e35b1 !important; }
+.st-key-area_grid button p { font-size: 1.12rem !important; font-weight: 700 !important; }
+.st-key-area_grid button, .st-key-area_grid button * { white-space: normal !important; overflow: visible !important;
+  text-overflow: clip !important; }
+.st-key-area_grid button[kind="primary"], .st-key-area_grid button[data-testid="stBaseButton-primary"],
+.st-key-area_grid button[data-testid="baseButton-primary"] {
+  background: linear-gradient(120deg, #1e88e5, #5e35b1) !important; color: white !important; border-color: transparent !important;
 }
 .st-key-game_grid button { min-height: 5.4rem !important; border-radius: 16px !important; padding: 10px 12px !important;
   white-space: normal !important; transition: transform .08s ease, box-shadow .15s ease; }
@@ -2005,8 +2177,9 @@ def main():
     BASE_DIR = Path(__file__).parent
 
     st.markdown(APP_CSS, unsafe_allow_html=True)
-    hero_sub = ('<p>Wähle deine Klasse und Seite – dann such dir ein Spiel aus!</p>'
-                if st.session_state.get("setup_open", "klasse" not in st.query_params) else "")
+    hero_sub = ('<p>Wähle aus, was du üben möchtest – dann such dir ein Spiel aus!</p>'
+                if st.session_state.get("setup_open", "klasse" not in st.query_params
+                                        and "bereich" not in st.query_params) else "")
     st.markdown(f'<div class="app-hero"><h1>📚 Wortschatz-Spiele</h1>{hero_sub}</div>', unsafe_allow_html=True)
 
     # Sidebar
@@ -2069,10 +2242,17 @@ def main():
             "end": qp.get("bis"),
             "multi": bool(qp.get("bis")),
         }
-        if qp.get("spiel"):
-            st.session_state.game_choice = qp.get("spiel")
+        qp_game = qp.get("spiel")
+        # Verben-Bereich: neuer Link (?bereich=verben&spiel=…) oder alter Link (?klasse=…&spiel=irregulars)
+        is_verbs = str(qp.get("bereich", "")).lower() == "verben" or qp_game in VERB_GAME_CODES
+        st.session_state.area = "verben" if is_verbs else "vokabeln"
+        if qp_game:
+            if is_verbs:
+                st.session_state.verb_game = qp_game if qp_game in VERB_GAME_CODES else VERB_GAME_CODES[0]
+            else:
+                st.session_state.game_choice = qp_game
         # Mit Direktlink direkt ins Spiel, sonst erst auswählen
-        st.session_state.setup_open = qp_label is None
+        st.session_state.setup_open = not (is_verbs and qp_game) and qp_label is None
     sel = st.session_state.sel
     if sel["label"] not in unique_labels:
         sel["label"] = unique_labels[0]
@@ -2091,13 +2271,31 @@ def main():
             ("memory", "🃏", "Wörter Memory", "Passende Paare finden", "#43a047"),
             ("hangman", "🪢", "Hangman", "Wort Buchstabe für Buchstabe raten", "#f57c00"),
         ]
-        if not is_fr:
-            g.append(("irregulars", "🔀", "Unregelmäßige Verben", "Verbformen zuordnen", "#8e24aa"))
         return g
 
     setup_open = st.session_state.get("setup_open", True)
+    area = st.session_state.get("area", "vokabeln")
+    if area not in ("vokabeln", "verben"):
+        area = st.session_state.area = "vokabeln"
 
     if setup_open:
+        # ---------- Was üben? Vokabeln oder unregelmäßige Verben ----------
+        with keyed_container("area_box", border=True):
+            st.markdown('<div class="area-q">Was möchtest du üben?</div>', unsafe_allow_html=True)
+            with keyed_container("area_grid"):
+                a1, a2 = st.columns(2)
+                for col, code, label in ((a1, "vokabeln", "📚 Vokabeln"), (a2, "verben", "🔀 Unregelmäßige Verben")):
+                    with col:
+                        if st.button(label, key=f"area_{code}", type="primary" if area == code else "secondary", **WIDE):
+                            st.session_state.area = code
+                            st.rerun()
+
+    # Farben + Beschreibungen der Spiel-Karten. Steht bewusst hier (vor Schritt 1), damit an jeder
+    # Position beim Auf-/Zuklappen ein anderer Elementtyp steht – sonst behält Streamlits
+    # Testwerkzeug (ältere Versionen) alte Inhalte eines Kastens.
+    st.markdown(_tiles_css(_games_for(False, "") + VERB_GAMES), unsafe_allow_html=True)
+
+    if setup_open and area == "vokabeln":
         # ---------- Schritt 1: Klasse/Kurs + Seite ----------
         with st.container(border=True):
             _step_title(1, "Klasse und Seite wählen")
@@ -2146,37 +2344,49 @@ def main():
     game_codes = [g[0] for g in games]
     if st.session_state.get("game_choice") not in game_codes:
         st.session_state.game_choice = "input"
-    game_choice = st.session_state.game_choice
-    g_icon, g_title = next((g[1], g[2]) for g in games if g[0] == game_choice)
-    game_title = f"{g_icon} {g_title}" + (f" ({lang_name})" if game_choice in ("input", "hangman") else "")
+    if st.session_state.get("verb_game") not in VERB_GAME_CODES:
+        st.session_state.verb_game = VERB_GAME_CODES[0]
 
-    # Farben + Beschreibungen der Spiel-Karten
-    st.markdown(_tiles_css(games), unsafe_allow_html=True)
+    if area == "verben":
+        game_choice = st.session_state.verb_game
+        g_icon, g_title = next((g[1], g[2]) for g in VERB_GAMES if g[0] == game_choice)
+        game_title = f"{g_icon} {g_title}"
+        shown_games = VERB_GAMES
+    else:
+        game_choice = st.session_state.game_choice
+        g_icon, g_title = next((g[1], g[2]) for g in games if g[0] == game_choice)
+        game_title = f"{g_icon} {g_title}" + (f" ({lang_name})" if game_choice in ("input", "hangman") else "")
+        shown_games = games
 
     if setup_open:
-        # ---------- Schritt 2: Spiel wählen (Karten) ----------
+        # ---------- Spiel wählen (Karten) ----------
         with st.container(border=True):
-            _step_title(2, "Spiel auswählen")
+            _step_title(2 if area == "vokabeln" else 1, "Spiel auswählen")
             with keyed_container("game_grid"):
-                cols = st.columns(len(games))
-                for (code, icon, title, desc, color), col in zip(games, cols):
+                cols = st.columns(len(shown_games))
+                for (code, icon, title, desc, color), col in zip(shown_games, cols):
                     with col:
                         is_active = game_choice == code
                         if st.button(f"{icon} {title}", key=f"game_tile_{code}",
                                      type="primary" if is_active else "secondary", **WIDE):
-                            st.session_state.game_choice = code
+                            if area == "verben":
+                                st.session_state.verb_game = code
+                            else:
+                                st.session_state.game_choice = code
                             st.session_state.setup_open = False
                             st.rerun()
             st.caption("Tippe auf ein Spiel – dann geht's los.")
     else:
-        # ---------- Kompakte Leiste statt Schritt 1+2 ----------
+        # ---------- Kompakte Leiste statt Auswahl ----------
         with keyed_container("summary_bar", border=True):
             c_info, c_btn = st.columns([3.2, 1.8])
             with c_info:
+                chips = ([("🔀 Unregelmäßige Verben", "")] if area == "verben"
+                         else [(f"📚 {selected_label}", ""), (f"📖 {page_text}", "")])
                 st.markdown(
-                    f'<div class="sum-line"><span class="sum-chip">📚 {html_escape(selected_label)}</span>'
-                    f'<span class="sum-chip">📖 {html_escape(page_text)}</span>'
-                    f'<span class="sum-chip sum-game">{html_escape(game_title)}</span></div>',
+                    '<div class="sum-line">'
+                    + "".join(f'<span class="sum-chip">{html_escape(t)}</span>' for t, _ in chips)
+                    + f'<span class="sum-chip sum-game">{html_escape(game_title)}</span></div>',
                     unsafe_allow_html=True)
             with c_btn:
                 if st.button("⬅️ Zurück zur Auswahl", key="open_setup", **WIDE):
@@ -2184,9 +2394,12 @@ def main():
                     st.rerun()
 
     # Adresszeile aktuell halten (für Direktlinks)
-    desired_qp = {"klasse": label_to_code.get(selected_label, ""), "seite": str(selected_page), "spiel": game_choice}
-    if end_page != selected_page:
-        desired_qp["bis"] = str(end_page)
+    if area == "verben":
+        desired_qp = {"bereich": "verben", "spiel": game_choice}
+    else:
+        desired_qp = {"klasse": label_to_code.get(selected_label, ""), "seite": str(selected_page), "spiel": game_choice}
+        if end_page != selected_page:
+            desired_qp["bis"] = str(end_page)
     try:
         if {k: st.query_params.get(k) for k in st.query_params.keys()} != desired_qp:
             st.query_params.clear()
@@ -2197,17 +2410,29 @@ def main():
 
     with st.sidebar:
         with st.expander("🔗 Übung teilen (Link / QR-Code)"):
-            st.caption("Damit landen alle direkt in dieser Klasse, Seite und diesem Spiel.")
+            st.caption("Damit landen alle direkt bei den unregelmäßigen Verben in diesem Spiel." if area == "verben"
+                       else "Damit landen alle direkt in dieser Klasse, Seite und diesem Spiel.")
             _share_box("&".join(f"{k}={v}" for k, v in desired_qp.items()))
+
+    if area == "verben":
+        with st.container(border=True):
+            if setup_open:
+                _step_title(2, game_title)
+            if game_choice == "irregulars":
+                game_irregulars_assign()
+            elif game_choice == "verbs_type":
+                game_verbs_type()
+            else:
+                game_verbs_memory()
+        return
 
     # ---------- Schritt 3: Spielen ----------
     with st.container(border=True):
         if setup_open:
             _step_title(3, game_title)
-        if game_choice != "irregulars":
-            st.caption(f"{selected_label} · {page_text} · {len(df_vocab)} Vokabeln")
+        st.caption(f"{selected_label} · {page_text} · {len(df_vocab)} Vokabeln")
 
-        if df_vocab.empty and game_choice != "irregulars":
+        if df_vocab.empty:
             st.warning(f"Datei **{selected_path.name}** enthält keine Vokabeln.")
 
         if game_choice in ["input", "mc", "memory", "hangman"]:
@@ -2279,9 +2504,6 @@ def main():
                     st.info("Für das Hangman-Spiel sind Seiten-Vokabeln nötig.")
                 else:
                     game_hangman(df_vocab, selected_label, page_key, seed_val, lang=lang)
-
-        elif game_choice == "irregulars":
-            game_irregulars_assign()
 
     if st.session_state.dev_mode:
         st.subheader("Technische Infos: aktuelle Auswahl")
