@@ -103,8 +103,8 @@ VERBS = [
 ]
 VERB_TARGETS = [
     ("Infinitive", "infinitive"),
-    ("Past Simple", "pastSimple"),
-    ("Past Participle", "pastParticiple"),
+    ("Simple Past (2. Form des Verbs)", "pastSimple"),
+    ("Past Participle (3. Form des Verbs)", "pastParticiple"),
     ("Meaning (Deutsch)", "meaning"),
 ]
 
@@ -1857,6 +1857,13 @@ div[data-testid="stButton"] button, div[data-testid="stFormSubmitButton"] button
 .st-key-game_grid button p { font-size: 1.08rem !important; font-weight: 700 !important; line-height: 1.25; }
 /* Titel und Beschreibung umbrechen statt abschneiden */
 .st-key-game_grid button, .st-key-game_grid button * {
+  white-space: normal !important; overflow: visible !important; text-overflow: clip !important; max-width: 100%;
+}
+/* Verben-Ziele (z. B. „Past Participle (3. Form des Verbs)“), Wörter und „Zurück“: umbrechen statt abschneiden */
+[class*="st-key-verb_target_btn_"] button, [class*="st-key-verb_target_btn_"] button *,
+[class*="st-key-verbs_target_"] button, [class*="st-key-verbs_target_"] button *,
+[class*="st-key-verbs_word_"] button, [class*="st-key-verbs_word_"] button *,
+.st-key-open_setup button, .st-key-open_setup button * {
   white-space: normal !important; overflow: visible !important; text-overflow: clip !important; max-width: 100%;
 }
 .sum-line { margin-bottom: 2px; }
