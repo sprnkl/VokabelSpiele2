@@ -407,6 +407,10 @@ try:
 except (TypeError, ValueError):
     _NEW_WIDTH_API = False
 WIDE = {"width": "stretch"} if _NEW_WIDTH_API else {"use_container_width": True}
+try:
+    _COLS_VALIGN = "vertical_alignment" in inspect.signature(st.columns).parameters
+except Exception:
+    _COLS_VALIGN = False
 
 
 def js_json(obj) -> str:
@@ -485,7 +489,96 @@ try { speechSynthesis.getVoices(); } catch (e) {}
 </script>"""
 
 
-def status_bar(timer: dict, nonce: str = "", progress=None, chips=()):
+SFX_JS = """
+<script>
+// Spiel-Töne (im Browser erzeugt, keine Tondateien). Alle eingebetteten Elemente nutzen EINEN
+// Audio-Kontext im Hauptfenster: der wird beim ersten Antippen der Seite freigeschaltet (iPad/iPhone).
+function __vsWin() { try { if (window.parent && window.parent.document) return window.parent; } catch (e) {} return window; }
+function __vsSfxOn() {
+  try { return !__vsWin().document.querySelector('.vs-sfx-off'); } catch (e) { return true; }
+}
+function __acx() {
+  const w = __vsWin();
+  try {
+    if (!w.__vsAC) {
+      const C = w.AudioContext || w.webkitAudioContext;
+      if (!C) return null;
+      w.__vsAC = new C();
+      const un = () => { try { if (w.__vsAC.state !== 'running') w.__vsAC.resume(); } catch (e) {} };
+      ['pointerdown', 'touchstart', 'keydown'].forEach(ev => w.document.addEventListener(ev, un, true));
+    }
+    if (w.__vsAC.state === 'suspended') w.__vsAC.resume();
+    return w.__vsAC;
+  } catch (e) { return null; }
+}
+function __tone(c, out, f, t, d, type, v, f2) {
+  const o = c.createOscillator(), g = c.createGain(), t0 = c.currentTime + t;
+  o.type = type || 'sine';
+  o.frequency.setValueAtTime(f, t0);
+  if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + d);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(v, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+  o.connect(g); g.connect(out); o.start(t0); o.stop(t0 + d + 0.05);
+}
+function __sfx(kind, level) {
+  if (!__vsSfxOn()) return;
+  const c = __acx(); if (!c) return;
+  try {
+    const out = c.createGain(); out.gain.value = 0.75; out.connect(c.destination);
+    const T = (f, t, d, ty, v, f2) => __tone(c, out, f, t, d, ty, v, f2);
+    const up = Math.pow(2, Math.max(0, Math.min(level || 0, 12)) / 12);   // je Serie einen Halbton höher
+    const C5 = 523.25, n = (st) => C5 * Math.pow(2, st / 12);
+    switch (kind) {
+      case 'ok': case 'match':
+        T(880 * up, 0, .13, 'triangle', .5); T(1318.5 * up, .075, .24, 'triangle', .45); T(2637 * up, .075, .16, 'sine', .07); break;
+      case 'almost':
+        T(659.3, 0, .12, 'triangle', .4); T(740, .09, .18, 'triangle', .3); break;
+      case 'bad':
+        T(230, 0, .24, 'sine', .55, 140); T(115, 0, .2, 'triangle', .18, 90); break;
+      case 'skip':
+        T(392, 0, .14, 'sine', .25, 300); break;
+      case 'pop':
+        T(1400, 0, .05, 'sine', .22, 1900); break;
+      case 'streak':
+        [0, 4, 7, 12, 16].forEach((s, i) => T(n(s), i * .07, .2, 'triangle', .4)); T(n(36), .36, .3, 'sine', .08); break;
+      case 'done':
+        [0, 7, 12].forEach((s, i) => T(n(s), i * .1, .24, 'triangle', .35)); break;
+      case 'win':
+        [0, 4, 7, 12].forEach((s, i) => T(n(s), i * .11, .2, 'triangle', .45));
+        [12, 16, 19, 24].forEach(s => T(n(s), .48, .8, 'triangle', .2));
+        [24, 28, 31, 36].forEach((s, i) => T(n(s), .56 + i * .06, .16, 'sine', .06)); break;
+      case 'lose':
+        [7, 3, 0].forEach((s, i) => T(n(s - 12), i * .18, .26, 'triangle', .35)); T(n(-17), .56, .55, 'sine', .3, n(-20)); break;
+    }
+  } catch (e) {}
+}
+// Jedes Ereignis nur einmal abspielen (die Leiste wird bei jedem Klick neu aufgebaut)
+function __sfxEvents(evs) {
+  let store = null;
+  try { const w = __vsWin(); w.__vsSfxDone = w.__vsSfxDone || {}; store = w.__vsSfxDone; } catch (e) {}
+  let delay = 0;
+  evs.forEach(e => {
+    const id = e[0];
+    if (store) { if (store[id]) return; store[id] = 1; }
+    else { try { const k = 'vs_sfx_' + id; if (sessionStorage.getItem(k)) return; sessionStorage.setItem(k, '1'); } catch (x) {} }
+    setTimeout(() => __sfx(e[1], e[2]), delay); delay += 280;
+  });
+}
+try { __acx(); } catch (e) {}
+</script>"""
+
+STREAK_MARKS = (5, 10, 15, 20, 30, 50)
+
+
+def sfx_html(events) -> str:
+    """Ton-Ereignisse [(eindeutige_id, art, stufe), …] als Skript; jedes wird nur einmal gespielt."""
+    if not events:
+        return ""
+    return SFX_JS + f"<script>__sfxEvents({js_json([list(e) for e in events])});</script>"
+
+
+def status_bar(timer: dict, nonce: str = "", progress=None, chips=(), sfx=None):
     """Kompakte Statusleiste: Fortschritt, Info-Chips und laufende Stoppuhr in einer Zeile.
 
     progress: None oder (text, Anteil 0..1); chips: Liste von (Text, Stil) mit Stil in
@@ -524,7 +617,7 @@ const base = {cur}; const running = {running}; const t0 = Date.now();
 function f(ms) {{ const s = Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0'); }}
 function upd() {{ document.getElementById('t').textContent = '⏱ ' + f(base + (running ? Date.now() - t0 : 0)); }}
 upd(); if (running) setInterval(upd, 250);
-</script>{AUTOSIZE_JS}""", height=48)
+</script>{sfx_html(sfx)}{AUTOSIZE_JS}""", height=48)
 
 
 def keyed_container(key: str, border: bool = False):
@@ -882,6 +975,25 @@ def _stop_timer(t):
         t["running"] = False
 
 
+def _practice_sfx(s):
+    """Töne für Eingabe / Multiple Choice / Verben eintippen aus dem Spielstand ableiten."""
+    ev = []
+    base = f'{s["timer"]["started_ms"]}-{s.get("round_label", "")}'
+    h = s["history"]
+    if h:
+        r = h[-1]["result"]
+        if r == "correct":
+            kind, lvl = ("streak" if s["streak"] in STREAK_MARKS else "ok"), s["streak"] - 1
+        else:
+            kind, lvl = {"almost": "almost", "wrong": "bad"}.get(r, "skip"), 0
+        ev.append((f"{base}-{len(h)}", kind, lvl))
+    n = len(s["order"])
+    if n and s["index"] >= n:
+        pct = 100 * s["counts"]["correct"] / n
+        ev.append((f"{base}-end", "win" if pct >= 80 else "done", 0))
+    return ev
+
+
 def _status_row(s):
     n = len(s["order"])
     done = min(s["index"], n)
@@ -890,6 +1002,7 @@ def _status_row(s):
         progress=(f"<b>{html_escape(s['round_label'])}</b> · {s.get('noun', WORD_NOUN)[0]} {min(done + 1, n)} von {n}",
                   done / n if n else 0),
         chips=[(f"🔥 Serie: {s['streak']}", "orange"), (f"✅ {s['counts']['correct']}", "green")],
+        sfx=_practice_sfx(s),
     )
 
 
@@ -1218,10 +1331,15 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
     solution, hint, t = state["solution"], state["hint"], state["timer"]
     max_fails = len(HANGMAN_PICS) - 1
 
+    def _sfx(kind):
+        state["sfx"] = (state.get("sfx", (0, ""))[0] + 1, kind)
+
+    hs = state.get("sfx")
     status_bar(
         t, nonce=f"{state['idx']}_{len(state['guessed'])}_{state['fails']}",
         chips=[(f"❤️ Fehler: {state['fails']} von {max_fails}", "red" if state["fails"] else "violet"),
                (f"🏆 Gelöst: {state.get('score', 0)}", "orange")],
+        sfx=[(f"{key}-{state['order'][0]}-{hs[0]}", hs[1], 0)] if hs else None,
     )
 
     show_sol_now = False
@@ -1267,6 +1385,11 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
                                 state["msg"] = None
                                 if all(_is_revealed(c, state["guessed"]) for c in solution):
                                     _mark_solved()
+                                    _sfx("win")
+                                elif state["fails"] >= max_fails:
+                                    _sfx("lose")
+                                else:
+                                    _sfx("pop" if letter in sol_letters else "bad")
                                 st.rerun()
 
         # Formular immer anzeigen (nach dem Lösen nur ausgegraut) – stabiler über alle Streamlit-Versionen
@@ -1280,10 +1403,13 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
                     res = "correct" if res2 == "correct" else res
                 if res == "correct":
                     _mark_solved()
+                    _sfx("win")
                 elif res == "almost":
                     state["msg"] = "🟡 Fast! Prüfe die Schreibweise noch einmal."
+                    _sfx("almost")
                 else:
                     state["msg"] = "❌ Das ist es leider nicht."
+                    _sfx("bad")
                 st.rerun()
         if playing and state.get("msg"):
             st.warning(state["msg"])
@@ -1426,13 +1552,14 @@ body {{ position:relative; }}
   <span id="progress"></span>
   <button class="btn" id="shuffleBtn">🔀 Neu mischen</button>
   <button class="btn toggle" id="modeBtn">Modus: </button>
-  <button class="btn toggle" id="soundBtn">🔊 Ton an</button>
+  <button class="btn toggle" id="soundBtn">🗣️ Vorlesen an</button>
 </div>
 
 <div id="box" class="grid" aria-live="polite"></div>
 <div id="overlay"><div class="box"><h2 id="ovTitle"></h2><p id="ovText"></p><button class="btn" id="ovBtn"></button></div></div>
 
 {VOICE_JS}
+{SFX_JS}
 <script>
 const allPairs = {pairs_json};
 const TTS_LANG = {tts_lang};
@@ -1479,7 +1606,9 @@ function onMatch(a, b) {{
   markCorrect(a); markCorrect(b);
   const p = pairs.find(p => String(p.id) === a.getAttribute('data-pid'));
   if (p) speak(p.say);
-  correctPairs += 1; updateProgress(); checkWin();
+  correctPairs += 1; updateProgress();
+  if (!(correctPairs === pairs.length)) __sfx('match', correctPairs - 1);
+  checkWin();
 }}
 
 function createCard(text, pid, isForeign) {{
@@ -1526,7 +1655,7 @@ function createCard(text, pid, isForeign) {{
       if (srcPid === tgtPid) {{
         draggedCard.style.opacity = '1'; onMatch(draggedCard, c);
       }} else {{
-        shake(draggedCard); shake(c); draggedCard.style.opacity = '1';
+        shake(draggedCard); shake(c); __sfx('bad'); draggedCard.style.opacity = '1';
       }}
       draggedCard = null;
     }});
@@ -1537,14 +1666,14 @@ function createCard(text, pid, isForeign) {{
 function handleTap(card) {{
   if (solved || card.classList.contains('correct')) return;
   startTimer();
-  if (!selectedCard) {{ selectedCard = card; card.classList.add('selected'); return; }}
+  if (!selectedCard) {{ selectedCard = card; card.classList.add('selected'); __sfx('pop'); return; }}
   if (selectedCard === card) {{ card.classList.remove('selected'); selectedCard = null; return; }}
   const a = selectedCard.getAttribute('data-pid');
   const b = card.getAttribute('data-pid');
   if (a === b) {{
     onMatch(selectedCard, card);
   }} else {{
-    shake(selectedCard); shake(card);
+    shake(selectedCard); shake(card); __sfx('bad');
     selectedCard.classList.remove('selected');
   }}
   selectedCard = null;
@@ -1607,10 +1736,12 @@ function checkWin() {{
   if (correctPairs === pairs.length && !solved) {{
     solved = true;
     if (roundIdx + 1 < nRounds()) {{
+      __sfx('streak');
       showOverlay("👍 Runde geschafft!", "Weiter geht's mit Runde " + (roundIdx + 2) + " von " + nRounds() + ".",
         "Weiter ➡️", () => {{ document.getElementById('overlay').style.display = 'none'; roundIdx += 1; layoutRound(); }});
     }} else {{
       pauseTimer();
+      __sfx('win');
       showOverlay("🎉 Geschafft!", "Alle " + allPairs.length + " Paare gefunden in " + fmt(elapsed) + ".",
         "🔄 Nochmal spielen", newGame);
     }}
@@ -1628,7 +1759,7 @@ document.getElementById('modeBtn').addEventListener('click', () => {{
 }});
 document.getElementById('soundBtn').addEventListener('click', () => {{
   SOUND = !SOUND;
-  document.getElementById('soundBtn').textContent = SOUND ? "🔊 Ton an" : "🔇 Ton aus";
+  document.getElementById('soundBtn').textContent = SOUND ? "🗣️ Vorlesen an" : "🗣️ Vorlesen aus";
 }});
 
 setModeLabel();
@@ -1683,8 +1814,10 @@ def game_irregulars_assign():
     st.caption("1️⃣ Tippe links auf ein Wort. 2️⃣ Tippe rechts auf die passende Form. "
                "Slash-Formen (z. B. was/were) werden akzeptiert.")
 
+    vs = st.session_state.get("verbs_sfx")
     status_bar(rnd_state["timer"], nonce=str(rnd_state["start_ts"]),
-               chips=[(f"🏆 Punkte: {st.session_state.verbs_points_total}", "orange")])
+               chips=[(f"🏆 Punkte: {st.session_state.verbs_points_total}", "orange")],
+               sfx=[(f"verbs-{vs[0]}", vs[1], vs[2])] if vs else None)
 
     if st.session_state.get("verbs_msg"):
         kind, text = st.session_state.verbs_msg
@@ -1725,11 +1858,17 @@ def game_irregulars_assign():
                         rnd_state["matches"][key] = selected_text
                         selected_item["hidden"] = True
                         st.session_state.verbs_points_total += 1
+                        n_ok = sum(1 for x in rnd_state["matches"].values() if x)
+                        n_evt = st.session_state.get("verbs_sfx", (0,))[0] + 1
                         if all(rnd_state["matches"].values()):
                             rnd_state["completed"] = True
                             _stop_timer(rnd_state["timer"])
+                            st.session_state.verbs_sfx = (n_evt, "win", 0)
+                        else:
+                            st.session_state.verbs_sfx = (n_evt, "ok", 2 * (n_ok - 1))
                         st.session_state.verbs_msg = ("ok", f"✅ Richtig! „{selected_text}“ ist {name}.")
                     else:
+                        st.session_state.verbs_sfx = (st.session_state.get("verbs_sfx", (0,))[0] + 1, "bad", 0)
                         st.session_state.verbs_msg = ("err", f"❌ Falsch! „{selected_text}“ ist nicht {name}.")
                     st.session_state.verbs_selected_idx = None
                     st.rerun()
@@ -1995,8 +2134,22 @@ div[data-testid="stButton"] button, div[data-testid="stFormSubmitButton"] button
 /* Kein Deploy-Knopf / Entwickler-Menü */
 [data-testid="stAppDeployButton"], [data-testid="stMainMenu"], #MainMenu { display: none !important; }
 
-/* Kopfbereich schlanker */
-.app-hero { padding: 14px 20px; margin-bottom: 14px; }
+/* Kopfbereich schlanker; der Farbverlauf liegt auf dem ganzen Titelbalken (inkl. Ton-Schalter) */
+.app-hero { padding: 0; margin-bottom: 0; background: transparent !important; }
+.st-key-hero_box {
+  background: linear-gradient(135deg, #1e88e5 0%, #5e35b1 100%);
+  border-radius: 16px; padding: 14px 16px 14px 20px; margin-bottom: 6px;
+}
+.st-key-hero_box [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center; gap: 10px !important; }
+.st-key-hero_box [data-testid="stColumn"]:first-child, .st-key-hero_box [data-testid="column"]:first-child { min-width: 0 !important; }
+.st-key-hero_box [data-testid="stColumn"]:last-child, .st-key-hero_box [data-testid="column"]:last-child {
+  flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; }
+.st-key-sfx_toggle button {
+  background: rgba(255,255,255,.18) !important; color: white !important; border: 1.5px solid rgba(255,255,255,.7) !important;
+  border-radius: 999px !important; padding: 4px 14px !important; min-height: 2.3rem !important; white-space: nowrap !important;
+}
+.st-key-sfx_toggle button:hover { background: rgba(255,255,255,.3) !important; }
+.st-key-sfx_toggle button p { color: white !important; font-weight: 700 !important; white-space: nowrap !important; }
 
 /* Spiel-Karten als Raster: PC 3 nebeneinander, Handy 2 */
 .st-key-game_grid [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 12px !important; }
@@ -2082,7 +2235,10 @@ section[data-testid="stSidebar"] .sb-head, section[data-testid="stSidebar"] .sb-
 section[data-testid="stSidebar"] .sb-sub { color: #5e35b1; }
 
 @media (max-width: 640px) {
-  .app-hero h1 { font-size: 1.4rem; }
+  .app-hero h1 { font-size: 1.22rem; }
+  .st-key-hero_box { padding: 12px 10px 12px 14px; }
+  .st-key-sfx_toggle button { padding: 2px 10px !important; min-height: 2rem !important; }
+  .st-key-sfx_toggle button p { font-size: .85rem !important; }
   .app-hero p { font-size: .92rem; }
   .block-container { padding-top: 3rem; padding-left: .8rem; padding-right: .8rem; }
   .vocab-word { font-size: 1.7rem; }
@@ -2180,7 +2336,21 @@ def main():
     hero_sub = ('<p>Wähle aus, was du üben möchtest – dann such dir ein Spiel aus!</p>'
                 if st.session_state.get("setup_open", "klasse" not in st.query_params
                                         and "bereich" not in st.query_params) else "")
-    st.markdown(f'<div class="app-hero"><h1>📚 Wortschatz-Spiele</h1>{hero_sub}</div>', unsafe_allow_html=True)
+    # Titelbalken mit dauerhaftem Ton-Schalter oben rechts
+    if "sfx_on" not in st.session_state:
+        st.session_state.sfx_on = True
+    with keyed_container("hero_box"):
+        h_txt, h_btn = st.columns([5, 1.4], vertical_alignment="center") if _COLS_VALIGN else st.columns([5, 1.4])
+        with h_txt:
+            # vs-sfx-on/off: daran erkennen die Spiele, ob Töne gespielt werden dürfen
+            flag = "vs-sfx-on" if st.session_state.sfx_on else "vs-sfx-off"
+            st.markdown(f'<div class="app-hero"><h1>📚 Wortschatz-Spiele</h1>{hero_sub}'
+                        f'<span class="{flag}"></span></div>', unsafe_allow_html=True)
+        with h_btn:
+            if st.button("🔔 Töne an" if st.session_state.sfx_on else "🔕 Töne aus", key="sfx_toggle",
+                         help="Spiel-Töne (z. B. bei richtigen Antworten) ein- oder ausschalten.", **WIDE):
+                st.session_state.sfx_on = not st.session_state.sfx_on
+                st.rerun()
 
     # Sidebar
     with st.sidebar:
