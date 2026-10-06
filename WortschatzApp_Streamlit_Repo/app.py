@@ -1437,14 +1437,21 @@ def game_hangman(df_view: pd.DataFrame, classe: str, page, seed_val: str, lang: 
 def game_word_memory(df_view: pd.DataFrame, classe: str, page,
                      show_solution_table: bool, subset_mode: str, subset_k: int,
                      seed_val: str, force_new_subset: bool = False, lang: str = "EN",
-                     tags=None, say_both: bool = False, col_names=None):
-    """tags: Beschriftung der Karten (linke Spalte, rechte Spalte), Standard ("DE", "EN"/"FR").
-    say_both: auch die linke Spalte bekommt einen 🔊-Knopf (z. B. bei Verbformen, beide Englisch).
-    col_names: Spaltennamen der Lösungstabelle."""
+                     tags=None, say_both: bool = False, col_names=None, fields=None, unit=None,
+                     caption=None, match_say_fields=None):
+    """Memory mit 2 oder mehr Spalten; jede Spalte für sich gemischt.
+    fields: Spalten aus df_view (Standard ["de", "en"]); bei 3 Feldern sucht man Dreiergruppen.
+    tags: Beschriftung der Karten je Spalte, Standard ("DE", "EN"/"FR").
+    say_both: alle Spalten bekommen einen 🔊-Knopf (sonst nur die fremdsprachigen).
+    col_names: Spaltenüberschriften / Spaltennamen der Lösungstabelle.
+    unit: (Plural, Dativ Plural) für die Anzeige, Standard ("Paare", "Paaren").
+    match_say_fields: diese Felder werden beim Finden vorgelesen (z. B. alle drei Verbformen)."""
+    fields = list(fields or ["de", "en"])
+    extra = [f for f in (match_say_fields or []) if f not in fields]
     base_items = [
-        {"de": r["de"], "en": r["en"]}
+        {f: r[f] for f in fields + extra}
         for r in df_view.to_dict("records")
-        if isinstance(r["de"], str) and isinstance(r["en"], str)
+        if all(isinstance(r.get(f), str) and r.get(f) for f in fields + extra)
     ]
     if not base_items:
         st.info("Keine Vokabeln vorhanden.")
@@ -1458,26 +1465,38 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
     # subset_mode kommt bereits als "all" oder "k" an
     items = _sample_subset(
         base_items, subset_mode, int(subset_k),
-        seed_val, subset_state_key, ["de", "en"]
+        seed_val, subset_state_key, fields
     )
+    unit = unit or ("Paare", "Paaren")
 
-    st.caption(f"Paare in dieser Runde: **{len(items)}** · Tippe links eine Karte an und rechts die passende "
+    st.caption(caption.format(n=len(items)) if caption else
+               f"Paare in dieser Runde: **{len(items)}** · Tippe links eine Karte an und rechts die passende "
                "(oder umgekehrt). Bei vielen Wörtern wird in kleineren Runden gespielt.")
 
     if show_solution_table:
         st.markdown("##### Lösung")
         st.dataframe(
-            pd.DataFrame(items)[["de", "en"]].rename(columns=dict(zip(
-                ("de", "en"), col_names or ("Deutsch", LANG_NAMES.get(lang, "EN"))))),
+            pd.DataFrame(items)[fields].rename(columns=dict(zip(
+                fields, col_names or ("Deutsch", LANG_NAMES.get(lang, "EN"))))),
             **WIDE, hide_index=True
         )
 
-    pairs_json = js_json(
-        [{"id": i, "de": it["de"], "en": it["en"], "say": main_form(it["en"]), "sayde": main_form(it["de"])}
-         for i, it in enumerate(items)]
-    )
-    tag_de, tag_fx = tags or ("DE", lang if lang in ("EN", "FR") else "EN")
-    head_de, head_fx = col_names or ("Deutsch", LANG_NAMES.get(lang, "Englisch"))
+    n_cols = len(fields)
+    tags = list(tags or ("DE", lang if lang in ("EN", "FR") else "EN"))
+    heads = list(col_names or ("Deutsch", LANG_NAMES.get(lang, "Englisch")))
+    say_cols = [True] * n_cols if say_both else [False] + [True] * (n_cols - 1)
+    # Beim Finden vorlesen: die fremdsprachigen Formen (bei Verben z. B. „go, went, gone“)
+    pairs_json = js_json([
+        {"id": i, "cols": [it[f] for f in fields], "say": [main_form(it[f]) for f in fields],
+         "matchSay": (", ".join(it[f].replace("/", ", ") for f in match_say_fields) if match_say_fields else
+                      ", ".join(it[f].replace("/", ", ") for f, sc in zip(fields, say_cols) if sc)
+                      if n_cols > 2 else main_form(it[fields[-1]]))}
+        for i, it in enumerate(items)
+    ])
+    cols_json = js_json([
+        {"tag": tags[c], "head": heads[c], "say": say_cols[c], "cls": ("de", "fx", "fx2")[min(c, 2)]}
+        for c in range(n_cols)
+    ])
     tts_lang = js_json(TTS_LANG.get(lang, "en-GB"))
 
     html = f"""<!DOCTYPE html>
@@ -1502,7 +1521,7 @@ body {{
 .btn:hover {{ background:var(--primary); color:white; }}
 .toggle {{ border-color:#7e57c2; color:#5e35b1; }}
 /* Zwei Spalten: links z. B. Deutsch, rechts Englisch – jede Spalte für sich gemischt */
-.grid {{ display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:8px 10px; align-items:stretch; }}
+.grid {{ display:grid; grid-template-columns: repeat({n_cols}, minmax(0,1fr)); gap:8px 10px; align-items:stretch; }}
 .grid .card {{ min-width:0; }}
 .colhead {{
   text-align:center; font-weight:800; font-size:13px; letter-spacing:.04em; text-transform:uppercase;
@@ -1510,6 +1529,8 @@ body {{
 }}
 .colhead.de {{ background:#64b5f6; }}
 .colhead.fx {{ background:#9575cd; }}
+.colhead.fx2 {{ background:#26a69a; }}
+#points {{ font-weight:bold; padding:6px 12px; border-radius:999px; background:#fff3e0; color:#e65100; }}
 @media (max-width: 420px) {{ .card {{ font-size:15px; padding:12px 6px; }} }}
 .card {{
   background:white; border:2px solid #90caf9; border-radius:12px;
@@ -1524,6 +1545,20 @@ body {{
   padding:1px 5px; margin-bottom:4px; color:white; background:#64b5f6;
 }}
 .card.fx .tag {{ background:#9575cd; }}
+.card.fx2 {{ border-color:#80cbc4; background:#f6fbfb; }}
+.card.fx2 .tag {{ background:#26a69a; }}
+/* drei Spalten: Etikett links, damit es nicht unter dem 🔊-Knopf liegt */
+.grid.g3 .card .tag {{ display:block; width:fit-content; margin:0 0 4px 0; }}
+.grid.g3 .card {{ padding:10px 6px; }}
+/* Handy, drei Spalten: Etikett weglassen (steht schon in der Spaltenüberschrift), Platz für 🔊 oben */
+@media (max-width: 520px) {{
+  .grid.g3 .card .tag {{ display:none; }}
+  .grid.g3 .card {{ padding:30px 4px 10px 4px; font-size:15px; }}
+  .grid.g3 {{ gap:6px; }}
+  .grid.g3 .colhead {{ font-size:11px; letter-spacing:0; padding:4px 2px; }}
+}}
+/* Ziehen bei Dreiergruppen: schon passend verbundene Karten */
+.card.part {{ border-style:dashed !important; border-color:#43a047 !important; background:#f1f8e9 !important; }}
 .card .txt {{ display:block; }}
 .card {{ position:relative; }}
 .card .say {{
@@ -1564,6 +1599,7 @@ body {{ position:relative; }}
 <div id="toolbar">
   <span id="timer">⏱ 00:00</span>
   <span id="progress"></span>
+  <span id="points">🏆 0</span>
   <button class="btn" id="shuffleBtn">🔀 Neu mischen</button>
   <button class="btn toggle" id="modeBtn">Modus: </button>
   <button class="btn toggle" id="soundBtn">🗣️ Vorlesen an</button>
@@ -1577,11 +1613,9 @@ body {{ position:relative; }}
 <script>
 const allPairs = {pairs_json};
 const TTS_LANG = {tts_lang};
-const LANG_TAG = {js_json(tag_fx)};
-const DE_TAG = {js_json(tag_de)};
-const HEAD_DE = {js_json(head_de)};
-const HEAD_FX = {js_json(head_fx)};
-const SAY_BOTH = {js_json(bool(say_both))};
+const COLS = {cols_json};
+const GROUP = COLS.length;            // 2 = Paare, 3 = Dreiergruppen (z. B. go – went – gone)
+const UNIT = {js_json(list(unit))};   // [Plural, Dativ Plural]
 const nativeDnD = ('ondragstart' in document.createElement('div'));
 let TAP_MODE = true;
 let SOUND = true;
@@ -1593,8 +1627,8 @@ const CHUNK = allPairs.length > MAX_ROUND + 2
 
 let running = false, timerId = null, startTime = null, elapsed = 0;
 let order = [], roundIdx = 0, pairs = [];
-let correctPairs = 0, solved = false;
-let draggedCard = null, selectedCard = null;
+let correctPairs = 0, solved = false, points = 0;
+let draggedCard = null, sel = [], linked = {{}};
 
 function fmt(ms) {{
   const s = Math.floor(ms / 1000);
@@ -1622,29 +1656,31 @@ function markCorrect(el) {{
   el.classList.add('correct'); el.classList.remove('selected'); el.setAttribute('aria-disabled','true');
 }}
 
-function onMatch(a, b) {{
-  markCorrect(a); markCorrect(b);
-  const p = pairs.find(p => String(p.id) === a.getAttribute('data-pid'));
-  if (p) speak(p.say);
-  correctPairs += 1; updateProgress();
+function onMatch(group) {{
+  group.forEach(el => {{ markCorrect(el); el.classList.remove('part'); }});
+  const p = pairs.find(p => String(p.id) === group[0].getAttribute('data-pid'));
+  if (p) speak(p.matchSay);
+  correctPairs += 1; points += 1; updateProgress();
   if (!(correctPairs === pairs.length)) __sfx('match', correctPairs - 1);
   checkWin();
 }}
 
-function createCard(text, pid, isForeign) {{
+function createCard(text, pid, ci) {{
+  const col = COLS[ci];
   const c = document.createElement('div');
-  c.className = 'card' + (isForeign ? ' fx' : ' de');
-  const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = isForeign ? LANG_TAG : DE_TAG;
+  c.className = 'card ' + col.cls;
+  c.setAttribute('data-col', String(ci));
+  const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = col.tag;
   const txt = document.createElement('span'); txt.className = 'txt'; txt.textContent = text;
   c.appendChild(tag); c.appendChild(txt);
-  if (isForeign || SAY_BOTH) {{
+  if (col.say) {{
     // Lautsprecher: Wort anhören, ohne die Karte auszuwählen
     const p = allPairs.find(p => String(p.id) === String(pid));
     const sb = document.createElement('button');
     sb.type = 'button'; sb.className = 'say'; sb.textContent = '🔊';
     sb.title = 'Anhören'; sb.setAttribute('aria-label', 'Anhören: ' + text);
     sb.draggable = false;
-    sb.addEventListener('click', (e) => {{ e.stopPropagation(); e.preventDefault(); speak(p ? (isForeign ? p.say : p.sayde) : text, true); }});
+    sb.addEventListener('click', (e) => {{ e.stopPropagation(); e.preventDefault(); speak(p ? p.say[ci] : text, true); }});
     sb.addEventListener('keydown', (e) => {{ e.stopPropagation(); }});
     sb.addEventListener('dragstart', (e) => {{ e.preventDefault(); e.stopPropagation(); }});
     c.appendChild(sb);
@@ -1672,10 +1708,15 @@ function createCard(text, pid, isForeign) {{
       if (!srcPid && draggedCard) srcPid = draggedCard.getAttribute('data-pid');
       const tgtPid = c.getAttribute('data-pid');
       if (!srcPid || !draggedCard || draggedCard === c || c.classList.contains('correct')) return;
-      if (srcPid === tgtPid) {{
-        draggedCard.style.opacity = '1'; onMatch(draggedCard, c);
+      draggedCard.style.opacity = '1';
+      if (srcPid === tgtPid && draggedCard.getAttribute('data-col') !== c.getAttribute('data-col')) {{
+        // passende Karten verbinden; bei Dreiergruppen erst mit der dritten Karte gefunden
+        const L = linked[tgtPid] = linked[tgtPid] || [];
+        for (const el of [draggedCard, c]) if (!L.includes(el)) L.push(el);
+        if (L.length >= GROUP) {{ delete linked[tgtPid]; onMatch(L); }}
+        else {{ L.forEach(el => el.classList.add('part')); __sfx('pop'); }}
       }} else {{
-        shake(draggedCard); shake(c); __sfx('bad'); draggedCard.style.opacity = '1';
+        shake(draggedCard); shake(c); __sfx('bad');
       }}
       draggedCard = null;
     }});
@@ -1686,17 +1727,20 @@ function createCard(text, pid, isForeign) {{
 function handleTap(card) {{
   if (solved || card.classList.contains('correct')) return;
   startTimer();
-  if (!selectedCard) {{ selectedCard = card; card.classList.add('selected'); __sfx('pop'); return; }}
-  if (selectedCard === card) {{ card.classList.remove('selected'); selectedCard = null; return; }}
-  const a = selectedCard.getAttribute('data-pid');
-  const b = card.getAttribute('data-pid');
-  if (a === b) {{
-    onMatch(selectedCard, card);
-  }} else {{
-    shake(selectedCard); shake(card); __sfx('bad');
-    selectedCard.classList.remove('selected');
+  // nochmal antippen = abwählen
+  if (sel.includes(card)) {{ card.classList.remove('selected'); sel = sel.filter(x => x !== card); return; }}
+  // andere Karte derselben Spalte = Auswahl wechseln
+  const same = sel.find(x => x.getAttribute('data-col') === card.getAttribute('data-col'));
+  if (same) {{ same.classList.remove('selected'); sel = sel.filter(x => x !== same); }}
+  const pid = card.getAttribute('data-pid');
+  if (sel.some(x => x.getAttribute('data-pid') !== pid)) {{
+    sel.forEach(shake); shake(card); __sfx('bad');
+    sel.forEach(x => x.classList.remove('selected')); sel = [];
+    return;
   }}
-  selectedCard = null;
+  card.classList.add('selected'); sel.push(card);
+  if (sel.length >= GROUP) {{ const g = sel; sel = []; onMatch(g); }}
+  else __sfx('pop');
 }}
 
 function shake(el) {{
@@ -1716,23 +1760,24 @@ function nRounds() {{ return Math.ceil(allPairs.length / CHUNK); }}
 
 function updateProgress() {{
   const r = nRounds() > 1 ? ("Runde " + (roundIdx + 1) + "/" + nRounds() + " · ") : "";
-  document.getElementById('progress').textContent = r + correctPairs + " von " + pairs.length + " Paaren";
+  document.getElementById('progress').textContent = r + correctPairs + " von " + pairs.length + " " + UNIT[1];
+  document.getElementById('points').textContent = "🏆 " + points;
 }}
 
 function layoutRound() {{
   const box = document.getElementById('box');
   box.innerHTML = "";
-  draggedCard = null; selectedCard = null; correctPairs = 0; solved = false;
+  draggedCard = null; sel = []; linked = {{}}; correctPairs = 0; solved = false;
   pairs = order.slice(roundIdx * CHUNK, (roundIdx + 1) * CHUNK);
-  // links alle Karten der einen Sprache, rechts die der anderen – jede Spalte eigens gemischt
-  // (abwechselnd eingefügt, damit nebeneinanderliegende Karten gleich hoch sind)
-  for (const [cls, head] of [['de', HEAD_DE], ['fx', HEAD_FX]]) {{
-    const h = document.createElement('div'); h.className = 'colhead ' + cls; h.textContent = head; box.appendChild(h);
+  box.classList.toggle('g3', GROUP >= 3);
+  // jede Spalte (z. B. Deutsch | Englisch) für sich gemischt;
+  // zeilenweise eingefügt, damit nebeneinanderliegende Karten gleich hoch sind
+  for (const col of COLS) {{
+    const h = document.createElement('div'); h.className = 'colhead ' + col.cls; h.textContent = col.head; box.appendChild(h);
   }}
-  const left = shuffleArray(pairs.slice()), right = shuffleArray(pairs.slice());
-  for (let r = 0; r < left.length; r++) {{
-    box.appendChild(createCard(left[r].de, left[r].id, false));
-    box.appendChild(createCard(right[r].en, right[r].id, true));
+  const mixed = COLS.map(() => shuffleArray(pairs.slice()));
+  for (let r = 0; r < pairs.length; r++) {{
+    for (let ci = 0; ci < GROUP; ci++) box.appendChild(createCard(mixed[ci][r].cols[ci], mixed[ci][r].id, ci));
   }}
   updateProgress();
   setTimeout(() => {{ try {{ __fit(); }} catch (e) {{}} }}, 30);
@@ -1742,7 +1787,7 @@ function newGame() {{
   document.getElementById('overlay').style.display = 'none';
   resetTimer();
   order = shuffleArray(allPairs.slice());
-  roundIdx = 0;
+  roundIdx = 0; points = 0;
   layoutRound();
 }}
 
@@ -1765,7 +1810,7 @@ function checkWin() {{
     }} else {{
       pauseTimer();
       __sfx('win');
-      showOverlay("🎉 Geschafft!", "Alle " + allPairs.length + " Paare gefunden in " + fmt(elapsed) + ".",
+      showOverlay("🎉 Geschafft!", "Alle " + allPairs.length + " " + UNIT[0] + " gefunden in " + fmt(elapsed) + ". 🏆 " + points + " Punkte",
         "🔄 Nochmal spielen", newGame);
     }}
   }}
@@ -1934,7 +1979,7 @@ def game_irregulars_assign():
             f' ({html_escape(v["meaning"])}) · ⏱ {fmt_ms(rnd_state["timer"]["elapsed_ms"])[:5]}</div>',
             unsafe_allow_html=True)
         speak_button(f'{v["infinitive"]}, {v["pastSimple"].replace("/", ", ")}, {v["pastParticiple"].replace("/", ", ")}',
-                     "EN", label="🔊 Alle Formen anhören")
+                     "EN", label="🔊 Alle drei Formen anhören")
 
     b1, b2 = st.columns(2)
     with b1:
@@ -1987,9 +2032,8 @@ def game_verbs_type():
             st.markdown(f'<div class="fb fb-wrong">❌ Leider falsch. So heißt es: {forms}'
                         f'<br><span class="fb-small">Du hast geschrieben: {html_escape(last["user"]) or "–"}</span></div>',
                         unsafe_allow_html=True)
-        if res != "correct":
-            speak_button(f'{v["infinitive"]}, {v["pastSimple"].replace("/", ", ")}, {v["pastParticiple"].replace("/", ", ")}',
-                         "EN", label="🔊 Alle Formen anhören")
+        speak_button(f'{v["infinitive"]}, {v["pastSimple"].replace("/", ", ")}, {v["pastParticiple"].replace("/", ", ")}',
+                     "EN", label="🔊 Alle drei Formen anhören")
 
     i = s["index"]
     if i >= len(s["order"]):
@@ -2051,25 +2095,33 @@ def game_verbs_type():
 
 # ---------- Unregelmäßige Verben: Memory ----------
 VERB_MEMORY_MODES = {
-    "ps": ("Grundform ↔ Simple Past (2. Form)", "infinitive", "pastSimple", ("1. FORM", "2. FORM")),
-    "pp": ("Grundform ↔ Past Participle (3. Form)", "infinitive", "pastParticiple", ("1. FORM", "3. FORM")),
-    "de": ("Englisch ↔ Deutsch", "meaning", "infinitive", ("DE", "EN")),
+    # Code: (Beschriftung, Felder, Karten-Etiketten, Spaltenüberschriften)
+    "alle3": ("Alle drei Formen: Grundform | 2. Form | 3. Form",
+              ["infinitive", "pastSimple", "pastParticiple"], ("1. FORM", "2. FORM", "3. FORM"),
+              ("Grundform", "2. Form", "3. Form")),
+    "de": ("Englisch ↔ Deutsch", ["meaning", "infinitive"], ("DE", "EN"), ("Deutsch", "Englisch")),
 }
 
 
 def game_verbs_memory():
+    # gespeicherter alter Modus (z. B. „ps“ aus einer früheren Version) -> Standard
+    if st.session_state.get("verbs_memory_mode") not in VERB_MEMORY_MODES:
+        st.session_state.pop("verbs_memory_mode", None)
     with st.expander("⚙️ Memory-Einstellungen (Formen, Anzahl der Karten, Lösung)", expanded=False):
         mode = st.radio("Was soll zusammengefunden werden?", options=list(VERB_MEMORY_MODES),
                         format_func=lambda m: VERB_MEMORY_MODES[m][0], key="verbs_memory_mode")
         k = st.slider("Anzahl der Verben", min_value=4, max_value=len(VERBS), value=10, key="verbs_memory_k")
         show_sol = st.checkbox("Lösungen anzeigen", key="verbs_memory_sol")
         force_new = st.button("🔀 Andere Verben auswählen", key="verbs_memory_new")
-    title, left, right, tags = VERB_MEMORY_MODES.get(mode, VERB_MEMORY_MODES["ps"])
-    df = pd.DataFrame([{"de": v[left], "en": v[right]} for v in VERBS])
-    game_word_memory(df, "verben", mode, show_sol, "k", k, "", force_new_subset=force_new, lang="EN",
-                     tags=tags, say_both=(mode != "de"),
-                     col_names=(("Deutsch", "Englisch") if mode == "de" else
-                                ("Grundform", "2. Form" if mode == "ps" else "3. Form")))
+    title, fields, tags, heads = VERB_MEMORY_MODES.get(mode, VERB_MEMORY_MODES["alle3"])
+    triple = len(fields) == 3
+    game_word_memory(pd.DataFrame(VERBS), "verben", mode, show_sol, "k", k, "", force_new_subset=force_new,
+                     lang="EN", tags=tags, say_both=triple, col_names=heads, fields=fields,
+                     unit=("Verben", "Verben") if triple else ("Paare", "Paaren"),
+                     match_say_fields=["infinitive", "pastSimple", "pastParticiple"],
+                     caption=("Verben in dieser Runde: **{n}** · Tippe die drei Formen eines Verbs an – "
+                              "Grundform, 2. Form und 3. Form. Jedes vollständige Verb gibt einen Punkt 🏆."
+                              if triple else None))
 
 
 # ============================ Haupt-UI (Controller) ============================
