@@ -1438,12 +1438,14 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
                      show_solution_table: bool, subset_mode: str, subset_k: int,
                      seed_val: str, force_new_subset: bool = False, lang: str = "EN",
                      tags=None, say_both: bool = False, col_names=None, fields=None, unit=None,
-                     caption=None, match_say_fields=None):
+                     caption=None, match_say_fields=None, say_cols=None, col_classes=None):
     """Memory mit 2 oder mehr Spalten; jede Spalte für sich gemischt.
     fields: Spalten aus df_view (Standard ["de", "en"]); bei 3 Feldern sucht man Dreiergruppen.
     tags: Beschriftung der Karten je Spalte, Standard ("DE", "EN"/"FR").
     say_both: alle Spalten bekommen einen 🔊-Knopf (sonst nur die fremdsprachigen).
     col_names: Spaltenüberschriften / Spaltennamen der Lösungstabelle.
+    say_cols: je Spalte, ob sie einen 🔊-Knopf bekommt (überschreibt say_both).
+    col_classes: Farbe je Spalte ("de" blau, "fx" lila, "fx2" türkis, "fx3" orange).
     unit: (Plural, Dativ Plural) für die Anzeige, Standard ("Paare", "Paaren").
     match_say_fields: diese Felder werden beim Finden vorgelesen (z. B. alle drei Verbformen)."""
     fields = list(fields or ["de", "en"])
@@ -1484,7 +1486,10 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
     n_cols = len(fields)
     tags = list(tags or ("DE", lang if lang in ("EN", "FR") else "EN"))
     heads = list(col_names or ("Deutsch", LANG_NAMES.get(lang, "Englisch")))
-    say_cols = [True] * n_cols if say_both else [False] + [True] * (n_cols - 1)
+    if say_cols is None:
+        say_cols = [True] * n_cols if say_both else [False] + [True] * (n_cols - 1)
+    say_cols = list(say_cols)
+    col_classes = list(col_classes or [("de", "fx", "fx2", "fx3")[min(c, 3)] for c in range(n_cols)])
     # Beim Finden vorlesen: die fremdsprachigen Formen (bei Verben z. B. „go, went, gone“)
     pairs_json = js_json([
         {"id": i, "cols": [it[f] for f in fields], "say": [main_form(it[f]) for f in fields],
@@ -1494,13 +1499,13 @@ def game_word_memory(df_view: pd.DataFrame, classe: str, page,
         for i, it in enumerate(items)
     ])
     cols_json = js_json([
-        {"tag": tags[c], "head": heads[c], "say": say_cols[c], "cls": ("de", "fx", "fx2")[min(c, 2)]}
+        {"tag": tags[c], "head": heads[c], "say": say_cols[c], "cls": col_classes[c]}
         for c in range(n_cols)
     ])
     tts_lang = js_json(TTS_LANG.get(lang, "en-GB"))
 
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
+<html lang="de"><head><meta charset="UTF-8">
 <style>
 :root {{ --primary:#1e88e5; --violet:#5e35b1; --success:#2e7d32; --danger:#d32f2f; }}
 * {{ -webkit-tap-highlight-color: transparent; box-sizing: border-box; }}
@@ -1530,6 +1535,7 @@ body {{
 .colhead.de {{ background:#64b5f6; }}
 .colhead.fx {{ background:#9575cd; }}
 .colhead.fx2 {{ background:#26a69a; }}
+.colhead.fx3 {{ background:#ef6c00; }}
 #points {{ font-weight:bold; padding:6px 12px; border-radius:999px; background:#fff3e0; color:#e65100; }}
 @media (max-width: 420px) {{ .card {{ font-size:15px; padding:12px 6px; }} }}
 .card {{
@@ -1547,6 +1553,20 @@ body {{
 .card.fx .tag {{ background:#9575cd; }}
 .card.fx2 {{ border-color:#80cbc4; background:#f6fbfb; }}
 .card.fx2 .tag {{ background:#26a69a; }}
+.card.fx3 {{ border-color:#ffb74d; background:#fffaf3; }}
+.card.fx3 .tag {{ background:#ef6c00; }}
+/* lange Wörter: deutsche Silbentrennung (unter-richten), englische Karten ohne Trennung */
+.grid .card .txt {{ overflow-wrap:break-word; hyphens:auto; -webkit-hyphens:auto; }}
+.grid .card .txt[lang="en"], .grid .card .txt[lang="fr"] {{ hyphens:manual; -webkit-hyphens:manual; overflow-wrap:anywhere; }}
+.colhead {{ hyphens:auto; -webkit-hyphens:auto; overflow-wrap:break-word; }}
+/* vier Spalten: etwas kleiner */
+.grid.g4 .card {{ font-size:15px; }}
+@media (max-width: 520px) {{
+  .grid.g4 {{ gap:5px 4px; }}
+  .grid.g4 .card {{ font-size:13.5px; padding:30px 3px 8px 3px; border-radius:10px; }}
+  .grid.g4 .colhead {{ font-size:11px; padding:4px 1px; text-transform:none; line-height:1.15; }}
+  .grid.g4 .card .say {{ padding:0 4px; font-size:11px; top:3px; right:3px; }}
+}}
 /* drei Spalten: Etikett links, damit es nicht unter dem 🔊-Knopf liegt */
 .grid.g3 .card .tag {{ display:block; width:fit-content; margin:0 0 4px 0; }}
 .grid.g3 .card {{ padding:10px 6px; }}
@@ -1672,6 +1692,7 @@ function createCard(text, pid, ci) {{
   c.setAttribute('data-col', String(ci));
   const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = col.tag;
   const txt = document.createElement('span'); txt.className = 'txt'; txt.textContent = text;
+  if (col.say) txt.setAttribute('lang', TTS_LANG.slice(0, 2));   // fremdsprachige Karte
   c.appendChild(tag); c.appendChild(txt);
   if (col.say) {{
     // Lautsprecher: Wort anhören, ohne die Karte auszuwählen
@@ -1680,7 +1701,12 @@ function createCard(text, pid, ci) {{
     sb.type = 'button'; sb.className = 'say'; sb.textContent = '🔊';
     sb.title = 'Anhören'; sb.setAttribute('aria-label', 'Anhören: ' + text);
     sb.draggable = false;
-    sb.addEventListener('click', (e) => {{ e.stopPropagation(); e.preventDefault(); speak(p ? p.say[ci] : text, true); }});
+    sb.addEventListener('click', (e) => {{
+      e.stopPropagation(); e.preventDefault(); speak(p ? p.say[ci] : text, true);
+      // Wer beim Antippen der Karte den 🔊-Knopf erwischt, wählt die Karte trotzdem aus
+      // (sonst „reagiert“ die Karte scheinbar nicht – v. a. bei schmalen Karten auf dem Handy)
+      if ((TAP_MODE || !nativeDnD) && !c.classList.contains('selected')) handleTap(c);
+    }});
     sb.addEventListener('keydown', (e) => {{ e.stopPropagation(); }});
     sb.addEventListener('dragstart', (e) => {{ e.preventDefault(); e.stopPropagation(); }});
     c.appendChild(sb);
@@ -1770,6 +1796,7 @@ function layoutRound() {{
   draggedCard = null; sel = []; linked = {{}}; correctPairs = 0; solved = false;
   pairs = order.slice(roundIdx * CHUNK, (roundIdx + 1) * CHUNK);
   box.classList.toggle('g3', GROUP >= 3);
+  box.classList.toggle('g4', GROUP >= 4);
   // jede Spalte (z. B. Deutsch | Englisch) für sich gemischt;
   // zeilenweise eingefügt, damit nebeneinanderliegende Karten gleich hoch sind
   for (const col of COLS) {{
@@ -2096,15 +2123,15 @@ def game_verbs_type():
 # ---------- Unregelmäßige Verben: Memory ----------
 VERB_MEMORY_MODES = {
     # Code: (Beschriftung, Felder, Karten-Etiketten, Spaltenüberschriften)
-    "alle3": ("Alle drei Formen: Grundform | 2. Form | 3. Form",
-              ["infinitive", "pastSimple", "pastParticiple"], ("1. FORM", "2. FORM", "3. FORM"),
-              ("Grundform", "2. Form", "3. Form")),
+    "alle4": ("Alle vier Karten: Grundform | 2. Form | 3. Form | Deutsch",
+              ["infinitive", "pastSimple", "pastParticiple", "meaning"], ("1. FORM", "2. FORM", "3. FORM", "DE"),
+              ("Grundform", "2. Form", "3. Form", "Deutsch")),
     "de": ("Englisch ↔ Deutsch", ["meaning", "infinitive"], ("DE", "EN"), ("Deutsch", "Englisch")),
 }
 
 
 def game_verbs_memory():
-    # gespeicherter alter Modus (z. B. „ps“ aus einer früheren Version) -> Standard
+    # gespeicherter alter Modus (z. B. „ps“ oder „alle3“ aus einer früheren Version) -> Standard
     if st.session_state.get("verbs_memory_mode") not in VERB_MEMORY_MODES:
         st.session_state.pop("verbs_memory_mode", None)
     with st.expander("⚙️ Memory-Einstellungen (Formen, Anzahl der Karten, Lösung)", expanded=False):
@@ -2113,15 +2140,19 @@ def game_verbs_memory():
         k = st.slider("Anzahl der Verben", min_value=4, max_value=len(VERBS), value=10, key="verbs_memory_k")
         show_sol = st.checkbox("Lösungen anzeigen", key="verbs_memory_sol")
         force_new = st.button("🔀 Andere Verben auswählen", key="verbs_memory_new")
-    title, fields, tags, heads = VERB_MEMORY_MODES.get(mode, VERB_MEMORY_MODES["alle3"])
-    triple = len(fields) == 3
+    title, fields, tags, heads = VERB_MEMORY_MODES.get(mode, VERB_MEMORY_MODES["alle4"])
+    full = len(fields) == 4
     game_word_memory(pd.DataFrame(VERBS), "verben", mode, show_sol, "k", k, "", force_new_subset=force_new,
-                     lang="EN", tags=tags, say_both=triple, col_names=heads, fields=fields,
-                     unit=("Verben", "Verben") if triple else ("Paare", "Paaren"),
+                     lang="EN", tags=tags, col_names=heads, fields=fields,
+                     # 🔊 nur auf den englischen Karten (die deutsche würde sonst englisch ausgesprochen)
+                     say_cols=[True, True, True, False] if full else [False, True],
+                     col_classes=["fx", "fx2", "fx3", "de"] if full else ["de", "fx"],
+                     unit=("Verben", "Verben") if full else ("Paare", "Paaren"),
                      match_say_fields=["infinitive", "pastSimple", "pastParticiple"],
-                     caption=("Verben in dieser Runde: **{n}** · Tippe die drei Formen eines Verbs an – "
-                              "Grundform, 2. Form und 3. Form. Jedes vollständige Verb gibt einen Punkt 🏆."
-                              if triple else None))
+                     caption=("Verben in dieser Runde: **{n}** · Tippe zu jedem Verb alle vier Karten an – "
+                              "Grundform, 2. Form, 3. Form und die deutsche Bedeutung. "
+                              "Jedes vollständige Verb gibt einen Punkt 🏆."
+                              if full else None))
 
 
 # ============================ Haupt-UI (Controller) ============================
