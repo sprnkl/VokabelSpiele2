@@ -2123,9 +2123,9 @@ def game_verbs_type():
 # ---------- Unregelmäßige Verben: Memory ----------
 VERB_MEMORY_MODES = {
     # Code: (Beschriftung, Felder, Karten-Etiketten, Spaltenüberschriften)
-    "alle4": ("Alle vier Karten: Grundform | 2. Form | 3. Form | Deutsch",
-              ["infinitive", "pastSimple", "pastParticiple", "meaning"], ("1. FORM", "2. FORM", "3. FORM", "DE"),
-              ("Grundform", "2. Form", "3. Form", "Deutsch")),
+    "alle4": ("Alle vier Karten: Deutsch | Grundform | 2. Form | 3. Form",
+              ["meaning", "infinitive", "pastSimple", "pastParticiple"], ("DE", "1. FORM", "2. FORM", "3. FORM"),
+              ("Deutsch", "Grundform", "2. Form", "3. Form")),
     "de": ("Englisch ↔ Deutsch", ["meaning", "infinitive"], ("DE", "EN"), ("Deutsch", "Englisch")),
 }
 
@@ -2145,12 +2145,12 @@ def game_verbs_memory():
     game_word_memory(pd.DataFrame(VERBS), "verben", mode, show_sol, "k", k, "", force_new_subset=force_new,
                      lang="EN", tags=tags, col_names=heads, fields=fields,
                      # 🔊 nur auf den englischen Karten (die deutsche würde sonst englisch ausgesprochen)
-                     say_cols=[True, True, True, False] if full else [False, True],
-                     col_classes=["fx", "fx2", "fx3", "de"] if full else ["de", "fx"],
+                     say_cols=[False, True, True, True] if full else [False, True],
+                     col_classes=["de", "fx", "fx2", "fx3"] if full else ["de", "fx"],
                      unit=("Verben", "Verben") if full else ("Paare", "Paaren"),
                      match_say_fields=["infinitive", "pastSimple", "pastParticiple"],
                      caption=("Verben in dieser Runde: **{n}** · Tippe zu jedem Verb alle vier Karten an – "
-                              "Grundform, 2. Form, 3. Form und die deutsche Bedeutung. "
+                              "die deutsche Bedeutung, die Grundform, die 2. und die 3. Form. "
                               "Jedes vollständige Verb gibt einen Punkt 🏆."
                               if full else None))
 
